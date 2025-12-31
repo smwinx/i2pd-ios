@@ -32,14 +32,6 @@ target 'Runner' do
   use_modular_headers!
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-  
-  # i2pd dependencies (if needed for networking)
-  # pod 'OpenSSL-Universal', '~> 1.1.1100'
-  # pod 'Boost', :podspec => 'https://raw.githubusercontent.com/nicklockwood/Boost-Build/master/Boost.podspec'
-  
-  target 'RunnerTests' do
-    inherit! :search_paths
-  end
 end
 
 post_install do |installer|
@@ -47,22 +39,7 @@ post_install do |installer|
     flutter_additional_ios_build_settings(target)
     
     target.build_configurations.each do |config|
-      # Enable ARM64 for all builds
-      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'i386'
-      
-      # iOS 14 minimum
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
-      
-      # Bitcode disabled (Apple deprecated it)
-      config.build_settings['ENABLE_BITCODE'] = 'NO'
-      
-      # For i2pd static library linking
-      config.build_settings['OTHER_LDFLAGS'] ||= ['$(inherited)']
-      config.build_settings['OTHER_LDFLAGS'] << '-lstdc++'
-      
-      # C++ standard for i2pd
-      config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++17'
-      config.build_settings['CLANG_CXX_LIBRARY'] = 'libc++'
     end
   end
 end
