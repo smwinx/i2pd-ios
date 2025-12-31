@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Build i2pd iOS Library"]
+    types:
+      - completed
 
 env:
   FLUTTER_VERSION: '3.24.5'
@@ -16,6 +20,20 @@ jobs:
     steps:
       - name: Checkout app source
         uses: actions/checkout@v4
+
+      - name: Download i2pd library artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: build-i2pd-lib.yml
+          name: i2pd-ios-libs
+          path: ios/Libraries
+          if_no_artifact_found: warn
+        continue-on-error: true
+
+      - name: Check library download
+        run: |
+          echo "Checking downloaded libraries..."
+          ls -laR ios/Libraries/ 2>/dev/null || echo "No libraries downloaded"
 
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -49,7 +67,143 @@ jobs:
 
       - name: Create simplified AppDelegate
         run: |
-          cat > ios/Runner/AppDelegate.swift << 'SWIFT_EOF'
+          # Check if real library exists
+          if [ -f "ios/Libraries/i2pd.xcframework/ios-arm64/libi2pd_combined.a" ] || [ -d "ios/Libraries/i2pd.xcframework" ]; then
+            echo "Found i2pd library, creating bridged AppDelegate..."
+            
+            # Create bridging header for C wrapper
+            cat > ios/Runner/Runner-Bridging-Header.h << 'BRIDGE_EOF'
+          #ifndef Runner_Bridging_Header_h
+          #define Runner_Bridging_Header_h
+
+          #include "i2pd_wrapper.h"
+
+          #endif
+          BRIDGE_EOF
+
+            # Copy header to Runner
+            cp ios/Libraries/i2pd_wrapper.h ios/Runner/ 2>/dev/null || true
+            
+            # Create AppDelegate with real library calls
+            cat > ios/Runner/AppDelegate.swift << 'SWIFT_EOF'
+          import UIKit
+          import Flutter
+
+          @main
+          @objc class AppDelegate: FlutterAppDelegate {
+              private var daemonStartTime: Date?
+              
+              override func application(
+                  _ application: UIApplication,
+                  didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+              ) -> Bool {
+                  if let controller = window?.rootViewController as? FlutterViewController {
+                      setupMethodChannel(controller: controller)
+                  }
+                  return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+              }
+
+              private func setupMethodChannel(controller: FlutterViewController) {
+                  let channel = FlutterMethodChannel(
+                      name: "com.purplei2p.i2pd/native",
+                      binaryMessenger: controller.binaryMessenger
+                  )
+
+                  channel.setMethodCallHandler { [weak self] (call, result) in
+                      switch call.method {
+                      case "initialize":
+                          let dataPath = self?.getDataPath() ?? ""
+                          var config = I2pdConfig()
+                          config.dataDir = (dataPath as NSString).utf8String
+                          config.httpProxyPort = 4444
+                          config.socksProxyPort = 4447
+                          config.samPort = 7656
+                          config.i2cpPort = 7654
+                          config.logLevel = 1
+                          
+                          let initResult = i2pd_init(&config)
+                          result(initResult == 0)
+                          
+                      case "start":
+                          let startResult = i2pd_start()
+                          if startResult == 0 {
+                              self?.daemonStartTime = Date()
+                          }
+                          result(startResult == 0)
+                          
+                      case "stop":
+                          let stopResult = i2pd_stop()
+                          self?.daemonStartTime = nil
+                          result(stopResult == 0 ? nil : FlutterError(code: "STOP_FAILED", message: "Failed to stop daemon", details: nil))
+                          
+                      case "gracefulShutdown":
+                          let shutdownResult = i2pd_graceful_shutdown()
+                          self?.daemonStartTime = nil
+                          result(shutdownResult == 0 ? nil : FlutterError(code: "SHUTDOWN_FAILED", message: "Failed to shutdown", details: nil))
+                          
+                      case "getRouterInfo":
+                          var status = I2pdStatus()
+                          i2pd_get_status(&status)
+                          
+                          let uptime: Int
+                          if let startTime = self?.daemonStartTime {
+                              uptime = Int(Date().timeIntervalSince(startTime))
+                          } else {
+                              uptime = Int(status.uptime)
+                          }
+                          
+                          let statusStr: String
+                          switch status.networkStatus {
+                          case 0: statusStr = "stopped"
+                          case 1: statusStr = "starting"
+                          case 2: statusStr = "running"
+                          default: statusStr = "unknown"
+                          }
+                          
+                          result([
+                              "status": status.isRunning != 0 ? "running" : "stopped",
+                              "version": String(cString: i2pd_get_version()),
+                              "uptime": uptime,
+                              "networkStatus": statusStr,
+                              "activePeers": Int(status.activePeers),
+                              "knownPeers": Int(status.knownPeers),
+                              "activeTunnels": Int(status.activeTunnels),
+                              "inBandwidth": Int(status.inBandwidth),
+                              "outBandwidth": Int(status.outBandwidth)
+                          ])
+                          
+                      case "getDataPath":
+                          result(self?.getDataPath())
+                          
+                      case "configureHttpProxy", "configureSocksProxy":
+                          result(nil)
+                          
+                      default:
+                          result(FlutterMethodNotImplemented)
+                      }
+                  }
+              }
+              
+              private func getDataPath() -> String {
+                  let documentsPath = NSSearchPathForDirectoriesInDomains(
+                      .documentDirectory, .userDomainMask, true
+                  ).first!
+                  let i2pdPath = (documentsPath as NSString).appendingPathComponent("i2pd")
+                  
+                  // Create directory if needed
+                  try? FileManager.default.createDirectory(
+                      atPath: i2pdPath,
+                      withIntermediateDirectories: true,
+                      attributes: nil
+                  )
+                  
+                  return i2pdPath
+              }
+          }
+          SWIFT_EOF
+          else
+            echo "No library found, using stub AppDelegate..."
+            cat > ios/Runner/AppDelegate.swift << 'SWIFT_EOF'
           import UIKit
           import Flutter
 
@@ -82,7 +236,7 @@ jobs:
                       case "getRouterInfo":
                           result([
                               "status": "running",
-                              "version": "2.50.2",
+                              "version": "2.54.0",
                               "uptime": 0,
                               "networkStatus": "testing",
                               "activePeers": 0,
@@ -105,9 +259,16 @@ jobs:
               }
           }
           SWIFT_EOF
+          fi
 
       - name: Update Podfile for iOS 14
         run: |
+          # Check if we have the library to link
+          HAS_LIBRARY="false"
+          if [ -d "ios/Libraries/i2pd.xcframework" ]; then
+            HAS_LIBRARY="true"
+          fi
+          
           cat > ios/Podfile << 'PODFILE_EOF'
           platform :ios, '14.0'
 
@@ -150,6 +311,11 @@ jobs:
             end
           end
           PODFILE_EOF
+          
+          # If we have the library, configure Xcode project to link it
+          if [ "$HAS_LIBRARY" = "true" ]; then
+            echo "Library found - will configure linking after pod install"
+          fi
 
       - name: Get Flutter dependencies
         run: flutter pub get
@@ -157,6 +323,70 @@ jobs:
       - name: Install pods
         working-directory: ios
         run: pod install --repo-update
+
+      - name: Configure Xcode to link i2pd library
+        run: |
+          if [ -d "ios/Libraries/i2pd.xcframework" ]; then
+            echo "Configuring Xcode project to link i2pd library..."
+            
+            # Create a Ruby script to modify the Xcode project
+            cat > ios/configure_libs.rb << 'RUBY_EOF'
+          require 'xcodeproj'
+          
+          project_path = 'Runner.xcodeproj'
+          project = Xcodeproj::Project.open(project_path)
+          
+          target = project.targets.first
+          
+          # Add library search paths
+          target.build_configurations.each do |config|
+            lib_path = '$(PROJECT_DIR)/Libraries'
+            header_path = '$(PROJECT_DIR)/Libraries'
+            
+            # Library search paths
+            search_paths = config.build_settings['LIBRARY_SEARCH_PATHS'] || ['$(inherited)']
+            search_paths = [search_paths] unless search_paths.is_a?(Array)
+            search_paths << lib_path unless search_paths.include?(lib_path)
+            config.build_settings['LIBRARY_SEARCH_PATHS'] = search_paths
+            
+            # Header search paths
+            header_paths = config.build_settings['HEADER_SEARCH_PATHS'] || ['$(inherited)']
+            header_paths = [header_paths] unless header_paths.is_a?(Array)
+            header_paths << header_path unless header_paths.include?(header_path)
+            config.build_settings['HEADER_SEARCH_PATHS'] = header_paths
+            
+            # Framework search paths for XCFramework
+            framework_paths = config.build_settings['FRAMEWORK_SEARCH_PATHS'] || ['$(inherited)']
+            framework_paths = [framework_paths] unless framework_paths.is_a?(Array)
+            framework_paths << lib_path unless framework_paths.include?(lib_path)
+            config.build_settings['FRAMEWORK_SEARCH_PATHS'] = framework_paths
+            
+            # Other linker flags
+            other_flags = config.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
+            other_flags = [other_flags] unless other_flags.is_a?(Array)
+            
+            # Link against the combined library
+            libs_to_add = ['-libi2pd_combined', '-lc++']
+            libs_to_add.each do |lib|
+              other_flags << lib unless other_flags.include?(lib)
+            end
+            config.build_settings['OTHER_LDFLAGS'] = other_flags
+            
+            # Swift bridging header
+            config.build_settings['SWIFT_OBJC_BRIDGING_HEADER'] = '$(PROJECT_DIR)/Runner/Runner-Bridging-Header.h'
+          end
+          
+          project.save
+          puts "Xcode project configured successfully"
+          RUBY_EOF
+          
+            cd ios
+            gem install xcodeproj 2>/dev/null || true
+            ruby configure_libs.rb || echo "Project configuration skipped"
+            rm -f configure_libs.rb
+          else
+            echo "No library found, skipping Xcode configuration"
+          fi
 
       - name: Build iOS (no codesign)
         run: |
