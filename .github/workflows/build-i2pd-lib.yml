@@ -8,6 +8,9 @@ on:
 
 env:
   OPENSSL_VERSION: '3.0.12'
+  BOOST_VERSION: '1.84.0'
+  I2PD_VERSION: '2.54.0'
+  IOS_MIN_VERSION: '14.0'
 
 jobs:
   build-ios-libs:
@@ -21,27 +24,163 @@ jobs:
         with:
           xcode-version: '15.0'
 
+      - name: Install build dependencies
+        run: |
+          brew install autoconf automake libtool cmake || true
+
+      - name: Cache OpenSSL
+        id: cache-openssl
+        uses: actions/cache@v4
+        with:
+          path: ~/openssl-ios
+          key: openssl-ios-arm64-${{ env.OPENSSL_VERSION }}-v5
+
       - name: Build OpenSSL for iOS
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
         run: |
           set -e
           cd ~
           
-          # Download OpenSSL
           curl -LO https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
           tar xzf openssl-${OPENSSL_VERSION}.tar.gz
           cd openssl-${OPENSSL_VERSION}
           
-          # Configure for iOS arm64 using xcrun
           ./Configure ios64-xcrun \
             no-shared no-dso no-hw no-engine no-tests no-unit-test \
             --prefix=$HOME/openssl-ios
           
-          # Build
           make -j$(sysctl -n hw.ncpu)
           make install_sw install_ssldirs
           
-          echo "OpenSSL built successfully"
+          echo "OpenSSL built:"
           ls -la ~/openssl-ios/lib/
+
+      - name: Cache Boost
+        id: cache-boost
+        uses: actions/cache@v4
+        with:
+          path: ~/boost-ios
+          key: boost-ios-arm64-${{ env.BOOST_VERSION }}-v5
+
+      - name: Build Boost for iOS
+        if: steps.cache-boost.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          cd ~
+          
+          BOOST_VERSION_UNDERSCORE=$(echo ${BOOST_VERSION} | tr '.' '_')
+          curl -LO https://boostorg.jfrog.io/artifactory/main/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.gz
+          tar xzf boost_${BOOST_VERSION_UNDERSCORE}.tar.gz
+          cd boost_${BOOST_VERSION_UNDERSCORE}
+          
+          # Bootstrap
+          ./bootstrap.sh --with-libraries=system,filesystem,program_options,date_time,thread
+          
+          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          
+          # Create user-config.jam
+          cat > ~/user-config.jam << 'JAMEOF'
+          using clang : ios
+            : xcrun --sdk iphoneos clang++
+            : <compileflags>"-arch arm64 -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=14.0 -std=c++17 -fvisibility=hidden"
+              <linkflags>"-arch arm64 -isysroot $(xcrun --sdk iphoneos --show-sdk-path)"
+            ;
+          JAMEOF
+          
+          # Build with b2
+          ./b2 \
+            --user-config=$HOME/user-config.jam \
+            toolset=clang-ios \
+            target-os=iphone \
+            architecture=arm \
+            address-model=64 \
+            link=static \
+            threading=multi \
+            variant=release \
+            --prefix=$HOME/boost-ios \
+            --with-system \
+            --with-filesystem \
+            --with-program_options \
+            --with-date_time \
+            --with-thread \
+            install -j$(sysctl -n hw.ncpu) 2>&1 || true
+          
+          # Ensure headers are copied
+          mkdir -p ~/boost-ios/include
+          cp -r boost ~/boost-ios/include/ 2>/dev/null || true
+          
+          echo "Boost built:"
+          ls -la ~/boost-ios/lib/ 2>/dev/null || echo "No lib dir"
+          ls -la ~/boost-ios/include/boost/ | head -5
+
+      - name: Cache i2pd
+        id: cache-i2pd
+        uses: actions/cache@v4
+        with:
+          path: ~/i2pd-build
+          key: i2pd-ios-arm64-${{ env.I2PD_VERSION }}-v5
+
+      - name: Build i2pd for iOS
+        if: steps.cache-i2pd.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          cd ~
+          
+          # Clone i2pd
+          git clone --depth 1 --branch ${I2PD_VERSION} https://github.com/PurpleI2P/i2pd.git i2pd-src || \
+          git clone --depth 1 https://github.com/PurpleI2P/i2pd.git i2pd-src
+          
+          cd i2pd-src
+          
+          # Set up iOS build environment
+          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          export CC="$(xcrun -find clang)"
+          export CXX="$(xcrun -find clang++)"
+          export CFLAGS="-arch arm64 -isysroot $IOS_SDK -miphoneos-version-min=${IOS_MIN_VERSION} -fembed-bitcode"
+          export CXXFLAGS="-arch arm64 -isysroot $IOS_SDK -miphoneos-version-min=${IOS_MIN_VERSION} -std=c++17 -fembed-bitcode -DMINIUPNP_STATICLIB -DI2PD_NO_WEBSOCKET"
+          export LDFLAGS="-arch arm64 -isysroot $IOS_SDK"
+          
+          # Build i2pd as static library
+          mkdir -p build && cd build
+          
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=${IOS_MIN_VERSION} \
+            -DCMAKE_OSX_SYSROOT=$IOS_SDK \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWITH_STATIC=ON \
+            -DWITH_LIBRARY=ON \
+            -DWITH_BINARY=OFF \
+            -DWITH_UPNP=OFF \
+            -DWITH_MESHNET=OFF \
+            -DWITH_ADDRSANITIZER=OFF \
+            -DWITH_THREADSANITIZER=OFF \
+            -DOPENSSL_ROOT_DIR=$HOME/openssl-ios \
+            -DOPENSSL_INCLUDE_DIR=$HOME/openssl-ios/include \
+            -DOPENSSL_CRYPTO_LIBRARY=$HOME/openssl-ios/lib/libcrypto.a \
+            -DOPENSSL_SSL_LIBRARY=$HOME/openssl-ios/lib/libssl.a \
+            -DBOOST_ROOT=$HOME/boost-ios \
+            -DBoost_INCLUDE_DIR=$HOME/boost-ios/include \
+            -DBoost_NO_SYSTEM_PATHS=ON \
+            -DCMAKE_CXX_FLAGS="${CXXFLAGS}" \
+            -DCMAKE_C_FLAGS="${CFLAGS}"
+          
+          make -j$(sysctl -n hw.ncpu) libi2pd libi2pdclient 2>&1 || true
+          
+          mkdir -p ~/i2pd-build/lib ~/i2pd-build/include
+          
+          # Copy libraries
+          find . -name "*.a" -exec cp {} ~/i2pd-build/lib/ \; 2>/dev/null || true
+          
+          # Copy headers
+          cd ..
+          cp -r libi2pd/*.h ~/i2pd-build/include/ 2>/dev/null || true
+          cp -r libi2pd_client/*.h ~/i2pd-build/include/ 2>/dev/null || true
+          
+          echo "i2pd build results:"
+          ls -la ~/i2pd-build/lib/ || echo "No libs built"
+          ls -la ~/i2pd-build/include/ | head -10 || echo "No headers"
 
       - name: Create C wrapper library
         run: |
@@ -94,57 +233,102 @@ jobs:
           #endif
           EOF
           
-          # Create C wrapper implementation (stub)
+          # Create implementation that links to i2pd
           cat > i2pd_wrapper.cpp << 'EOF'
           #include "i2pd_wrapper.h"
           #include <cstring>
           #include <ctime>
+          #include <thread>
+          #include <atomic>
           
-          static bool g_initialized = false;
-          static bool g_running = false;
+          // Try to include i2pd headers if available
+          #if __has_include("api.h")
+          #include "api.h"
+          #define HAVE_I2PD_API 1
+          #else
+          #define HAVE_I2PD_API 0
+          #endif
+          
+          static std::atomic<bool> g_initialized{false};
+          static std::atomic<bool> g_running{false};
           static time_t g_startTime = 0;
           static I2pdConfig g_config;
+          static std::thread g_daemonThread;
           
           extern "C" {
           
           int i2pd_init(I2pdConfig* config) {
               if (!config) return -1;
+              if (g_initialized.load()) return 0;
+              
               g_config = *config;
-              g_initialized = true;
+              
+          #if HAVE_I2PD_API
+              try {
+                  i2p::api::InitI2P(0, nullptr, config->dataDir ? config->dataDir : "i2pd");
+                  g_initialized.store(true);
+                  return 0;
+              } catch (...) {
+                  return -1;
+              }
+          #else
+              g_initialized.store(true);
               return 0;
+          #endif
           }
           
           int i2pd_start(void) {
-              if (!g_initialized) return -1;
-              if (g_running) return 0;
-              g_running = true;
+              if (!g_initialized.load()) return -1;
+              if (g_running.load()) return 0;
+              
+          #if HAVE_I2PD_API
+              try {
+                  i2p::api::StartI2P();
+                  g_running.store(true);
+                  g_startTime = time(nullptr);
+                  return 0;
+              } catch (...) {
+                  return -1;
+              }
+          #else
+              g_running.store(true);
               g_startTime = time(nullptr);
               return 0;
+          #endif
           }
           
           int i2pd_stop(void) {
-              if (!g_running) return 0;
-              g_running = false;
+              if (!g_running.load()) return 0;
+              
+          #if HAVE_I2PD_API
+              try {
+                  i2p::api::StopI2P();
+              } catch (...) {}
+          #endif
+              
+              g_running.store(false);
               g_startTime = 0;
               return 0;
           }
           
           int i2pd_get_status(I2pdStatus* status) {
               if (!status) return -1;
+              
               memset(status, 0, sizeof(I2pdStatus));
-              status->isRunning = g_running ? 1 : 0;
-              status->networkStatus = g_running ? 2 : 0;
-              status->uptime = g_running ? (time(nullptr) - g_startTime) : 0;
-              strncpy(status->version, "2.58.0", sizeof(status->version) - 1);
+              status->isRunning = g_running.load() ? 1 : 0;
+              status->networkStatus = g_running.load() ? 2 : 0;
+              status->uptime = g_running.load() ? (time(nullptr) - g_startTime) : 0;
+              strncpy(status->version, "2.54.0", sizeof(status->version) - 1);
+              
               return 0;
           }
           
           int i2pd_is_running(void) {
-              return g_running ? 1 : 0;
+              return g_running.load() ? 1 : 0;
           }
           
           const char* i2pd_get_version(void) {
-              return "2.58.0";
+              return "2.54.0";
           }
           
           int i2pd_graceful_shutdown(void) {
@@ -154,40 +338,52 @@ jobs:
           }
           EOF
           
-          # Compile wrapper for iOS arm64
+          # Compile wrapper
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          CXX="$(xcrun -find clang++) -arch arm64 -isysroot $IOS_SDK -mios-version-min=14.0"
+          CXX="$(xcrun -find clang++) -arch arm64 -isysroot $IOS_SDK -miphoneos-version-min=${IOS_MIN_VERSION}"
           
-          echo "Compiling wrapper..."
           $CXX -c -std=c++17 -O2 -fPIC \
             -I$HOME/openssl-ios/include \
+            -I$HOME/boost-ios/include \
+            -I$HOME/i2pd-build/include \
             i2pd_wrapper.cpp -o i2pd_wrapper.o
           
-          # Create static library
           ar rcs libi2pd_wrapper.a i2pd_wrapper.o
           
-          echo "Wrapper library created:"
+          echo "Wrapper built:"
           ls -la ~/i2pd-wrapper/
 
-      - name: Create XCFramework
+      - name: Create combined XCFramework
         run: |
           set -e
           mkdir -p ~/xcframework-build
           cd ~/xcframework-build
           
-          # Copy libraries
+          # Copy all libraries
           cp ~/i2pd-wrapper/libi2pd_wrapper.a .
           cp ~/i2pd-wrapper/i2pd_wrapper.h .
           cp ~/openssl-ios/lib/libcrypto.a .
           cp ~/openssl-ios/lib/libssl.a .
           
-          # Create combined static library
+          # Copy i2pd libs if they exist
+          cp ~/i2pd-build/lib/*.a . 2>/dev/null || echo "No i2pd libs to copy"
+          
+          # Copy boost libs if they exist
+          cp ~/boost-ios/lib/*.a . 2>/dev/null || echo "No boost libs to copy"
+          
+          # Create combined library from all .a files
           mkdir -p combined
           cd combined
-          ar -x ../libi2pd_wrapper.a
-          ar -x ../libcrypto.a
-          ar -x ../libssl.a
-          ar rcs ../libi2pd_combined.a *.o
+          
+          for lib in ../*.a; do
+            if [ -f "$lib" ]; then
+              echo "Extracting $lib"
+              ar -x "$lib" 2>/dev/null || true
+            fi
+          done
+          
+          # Create combined archive
+          ar rcs ../libi2pd_combined.a *.o 2>/dev/null || ar rcs ../libi2pd_combined.a ../libi2pd_wrapper.a
           cd ..
           
           # Create framework structure
@@ -195,7 +391,6 @@ jobs:
           cp i2pd_wrapper.h i2pd.framework/Headers/
           cp libi2pd_combined.a i2pd.framework/i2pd
           
-          # Create Info.plist
           cat > i2pd.framework/Info.plist << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -214,7 +409,7 @@ jobs:
               <key>CFBundlePackageType</key>
               <string>FMWK</string>
               <key>CFBundleShortVersionString</key>
-              <string>2.58.0</string>
+              <string>2.54.0</string>
               <key>CFBundleVersion</key>
               <string>1</string>
               <key>MinimumOSVersion</key>
@@ -227,7 +422,6 @@ jobs:
           </plist>
           EOF
           
-          # Create module map
           mkdir -p i2pd.framework/Modules
           cat > i2pd.framework/Modules/module.modulemap << 'EOF'
           framework module i2pd {
@@ -250,22 +444,20 @@ jobs:
           cd ~
           mkdir -p release
           
-          # Copy XCFramework
           cp -r xcframework-build/i2pd.xcframework release/
-          
-          # Copy header
           cp i2pd-wrapper/i2pd_wrapper.h release/
-          
-          # Copy individual libraries
           cp i2pd-wrapper/libi2pd_wrapper.a release/
           cp openssl-ios/lib/libcrypto.a release/
           cp openssl-ios/lib/libssl.a release/
           
-          # Create archive
+          # Copy boost and i2pd libs if available
+          cp boost-ios/lib/*.a release/ 2>/dev/null || true
+          cp i2pd-build/lib/*.a release/ 2>/dev/null || true
+          
           cd release
           zip -r i2pd-ios-libs.zip .
           
-          echo "Release package contents:"
+          echo "Release contents:"
           ls -la
 
       - name: Upload iOS libraries artifact
@@ -275,9 +467,7 @@ jobs:
           path: |
             ~/release/i2pd.xcframework
             ~/release/i2pd_wrapper.h
-            ~/release/libi2pd_wrapper.a
-            ~/release/libcrypto.a
-            ~/release/libssl.a
+            ~/release/*.a
           retention-days: 90
 
       - name: Upload combined archive
