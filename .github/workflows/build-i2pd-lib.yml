@@ -9,7 +9,7 @@ on:
 env:
   OPENSSL_VERSION: '3.0.12'
   BOOST_VERSION: '1.84.0'
-  I2PD_VERSION: '2.50.2'
+  I2PD_VERSION: '2.58.0'
 
 jobs:
   build-ios-libs:
@@ -45,17 +45,10 @@ jobs:
           tar xzf openssl-${OPENSSL_VERSION}.tar.gz
           cd openssl-${OPENSSL_VERSION}
           
-          # Set up iOS toolchain
-          export IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          export CROSS_TOP="$(xcrun --sdk iphoneos --show-sdk-platform-path)/Developer"
-          export CROSS_SDK="iPhoneOS.sdk"
-          export PATH="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin:$PATH"
-          
-          # Configure for iOS arm64
-          ./Configure ios64-cross \
+          # Configure for iOS arm64 using xcrun (automatic SDK detection)
+          ./Configure ios64-xcrun \
             no-shared no-dso no-hw no-engine no-tests no-unit-test \
-            --prefix=$HOME/openssl-ios \
-            -fembed-bitcode
+            --prefix=$HOME/openssl-ios
           
           # Build
           make -j$(sysctl -n hw.ncpu)
@@ -130,14 +123,10 @@ jobs:
           set -e
           cd ~
           
-          # For now, create a minimal stub library
-          # Full i2pd integration will be added after base libraries work
-          echo "Skipping full i2pd build for now - will add after OpenSSL/Boost work"
-          
-          # Clone i2pd for headers
-          git clone --depth 1 --branch ${I2PD_VERSION} https://github.com/PurpleI2P/i2pd.git || \
+          # Clone i2pd (latest version for headers)
           git clone --depth 1 https://github.com/PurpleI2P/i2pd.git
           
+          echo "i2pd cloned:"
           ls -la ~/i2pd/
 
       - name: Create C wrapper library
@@ -270,7 +259,7 @@ jobs:
               status->uptime = g_running ? (time(nullptr) - g_startTime) : 0;
               status->inBandwidth = 0;
               status->outBandwidth = 0;
-              strncpy(status->version, "2.50.2", sizeof(status->version) - 1);
+              strncpy(status->version, "2.58.0", sizeof(status->version) - 1);
               
               // TODO: Get real status from i2pd
               
@@ -282,7 +271,7 @@ jobs:
           }
           
           const char* i2pd_get_version(void) {
-              return "2.50.2";
+              return "2.58.0";
           }
           
           int i2pd_graceful_shutdown(void) {
@@ -352,7 +341,7 @@ jobs:
               <key>CFBundlePackageType</key>
               <string>FMWK</string>
               <key>CFBundleShortVersionString</key>
-              <string>2.50.2</string>
+              <string>2.58.0</string>
               <key>CFBundleVersion</key>
               <string>1</string>
               <key>MinimumOSVersion</key>
