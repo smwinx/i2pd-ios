@@ -24,6 +24,16 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.1'
+          bundler-cache: false
+
+      - name: Install CocoaPods
+        run: |
+          gem install cocoapods
+
       - name: Create Flutter project structure
         run: |
           flutter create --org com.i2pd --project-name i2pd_ios --platforms ios .
@@ -35,6 +45,12 @@ jobs:
       - name: Install dependencies
         run: |
           flutter pub get
+
+      - name: Clean and install pods
+        run: |
+          cd ios
+          rm -rf Podfile.lock Pods .symlinks 2>/dev/null || true
+          pod install --repo-update
 
       - name: Build iOS app (no code signing)
         run: |
