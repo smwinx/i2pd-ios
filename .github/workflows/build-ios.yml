@@ -40,7 +40,7 @@ jobs:
           
       - name: Restore custom source files
         run: |
-          git checkout -- lib/ pubspec.yaml ios/Runner/Info.plist ios/Runner/AppDelegate.swift ios/Runner/Assets.xcassets/ ios/Runner/Base.lproj/ 2>/dev/null || true
+          git checkout -- lib/ pubspec.yaml ios/Runner/Info.plist ios/Runner/AppDelegate.swift ios/Runner/I2pdBridge.swift ios/Runner/Assets.xcassets/ ios/Runner/Base.lproj/ 2>/dev/null || true
 
       - name: Install dependencies
         run: |
