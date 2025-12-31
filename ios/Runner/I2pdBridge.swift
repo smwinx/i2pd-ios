@@ -1,11 +1,12 @@
 import Foundation
 
 /// Bridge class to interface with i2pd C++ library
-class I2pdBridge {
+@objc class I2pdBridge: NSObject {
     private var isRunning = false
     private var startTime: Date?
     
-    init() {
+    override init() {
+        super.init()
         // Load the i2pd static library
     }
     

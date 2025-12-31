@@ -9,8 +9,6 @@ import Flutter
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
-        GeneratedPluginRegistrant.register(with: self)
-        
         // Initialize i2pd bridge
         if let controller = window?.rootViewController as? FlutterViewController {
             setupMethodChannel(controller: controller)
