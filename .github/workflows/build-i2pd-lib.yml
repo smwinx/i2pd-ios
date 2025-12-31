@@ -70,6 +70,7 @@ jobs:
           set -e
           cd ~
           
+          # For wrapper library, we only need Boost headers, not compiled libs
           BOOST_VERSION_UNDERSCORE=$(echo ${BOOST_VERSION} | tr '.' '_')
           
           # Download Boost
@@ -77,46 +78,12 @@ jobs:
           tar xzf boost_${BOOST_VERSION_UNDERSCORE}.tar.gz
           cd boost_${BOOST_VERSION_UNDERSCORE}
           
-          # Bootstrap
-          ./bootstrap.sh --with-libraries=system,filesystem,program_options,date_time
-          
-          # Get iOS SDK path
-          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          
-          # Create user-config.jam for iOS cross-compilation
-          cat > $HOME/user-config.jam << EOF
-          using clang : ios
-            : xcrun --sdk iphoneos clang++ -arch arm64 -isysroot ${IOS_SDK} -miphoneos-version-min=14.0 -fembed-bitcode -std=c++17
-            : <striper> <root>${IOS_SDK}
-            ;
-          EOF
-          
-          # Build with proper iOS configuration
-          ./b2 \
-            --user-config=$HOME/user-config.jam \
-            toolset=clang-ios \
-            target-os=iphone \
-            architecture=arm \
-            address-model=64 \
-            abi=aapcs \
-            binary-format=mach-o \
-            link=static \
-            threading=multi \
-            variant=release \
-            --prefix=$HOME/boost-ios \
-            --with-system \
-            --with-filesystem \
-            --with-program_options \
-            --with-date_time \
-            install -j$(sysctl -n hw.ncpu) || echo "Boost build completed with some warnings"
-          
-          # Verify headers at minimum
+          # Just copy headers - no compilation needed for wrapper
           mkdir -p ~/boost-ios/include
-          cp -r boost ~/boost-ios/include/ 2>/dev/null || true
+          cp -r boost ~/boost-ios/include/
           
-          echo "Boost setup complete:"
-          ls -la ~/boost-ios/ || true
-          ls -la ~/boost-ios/include/boost/ | head -20 || true
+          echo "Boost headers installed:"
+          ls -la ~/boost-ios/include/boost/ | head -10
 
       - name: Clone and Build i2pd
         run: |
