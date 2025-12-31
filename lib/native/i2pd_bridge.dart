@@ -152,28 +152,3 @@ class I2pdBridge {
     }
   }
 }
-
-// Helper extension for string to native
-extension StringUtf8 on String {
-  Pointer<Utf8> toNativeUtf8() {
-    final units = utf8.encode(this);
-    final ptr = calloc<Uint8>(units.length + 1);
-    final list = ptr.asTypedList(units.length + 1);
-    list.setAll(0, units);
-    list[units.length] = 0;
-    return ptr.cast();
-  }
-}
-
-// Placeholder for calloc - real implementation uses ffi package
-final calloc = _Calloc();
-
-class _Calloc {
-  Pointer<T> call<T extends NativeType>(int count) {
-    throw UnimplementedError('Use ffi package calloc');
-  }
-  
-  void free(Pointer ptr) {
-    throw UnimplementedError('Use ffi package free');
-  }
-}
