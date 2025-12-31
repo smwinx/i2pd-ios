@@ -87,13 +87,13 @@ jobs:
 
       - name: Clone and Build i2pd
         run: |
-          set -e
           cd ~
           
           # Clone i2pd (latest version for headers)
-          git clone --depth 1 https://github.com/PurpleI2P/i2pd.git
+          echo "Cloning i2pd repository..."
+          git clone --depth 1 https://github.com/PurpleI2P/i2pd.git || { echo "Git clone failed"; exit 1; }
           
-          echo "i2pd cloned:"
+          echo "i2pd cloned successfully:"
           ls -la ~/i2pd/
 
       - name: Create C wrapper library
