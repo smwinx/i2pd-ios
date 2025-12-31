@@ -1,0 +1,182 @@
+name: Build iOS App
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  FLUTTER_VERSION: '3.24.5'
+
+jobs:
+  # Build Flutter app without i2pd native library (UI only version)
+  build-flutter-app:
+    runs-on: macos-14
+    steps:
+      - name: Checkout app source
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Install CocoaPods
+        run: |
+          sudo gem install cocoapods
+
+      - name: Install dependencies
+        run: |
+          flutter pub get
+          cd ios && pod install --repo-update
+
+      - name: Build iOS app (no code signing)
+        run: |
+          flutter build ios --release --no-codesign
+
+      - name: Create IPA (unsigned)
+        run: |
+          mkdir -p Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r i2pd-unsigned.ipa Payload
+          rm -rf Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: i2pd-ios-unsigned
+          path: i2pd-unsigned.ipa
+
+  # Optional: Build with i2pd native library (full version)
+  build-with-native:
+    runs-on: macos-14
+    if: false  # Enable when i2pd iOS build is ready
+    steps:
+      - name: Checkout i2pd source
+        uses: actions/checkout@v4
+        with:
+          repository: PurpleI2P/i2pd
+          path: i2pd
+
+      - name: Install dependencies
+        run: |
+          brew install cmake boost openssl@3
+
+      - name: Build i2pd for iOS (arm64)
+        run: |
+          cd i2pd
+          mkdir -p build-ios && cd build-ios
+          
+          # iOS SDK path
+          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_SYSROOT=$IOS_SDK \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DWITH_STATIC=ON \
+            -DWITH_BINARY=OFF \
+            -DWITH_LIBRARY=ON \
+            -DWITH_UPNP=OFF \
+            -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3) \
+            -DBoost_INCLUDE_DIR=$(brew --prefix boost)/include \
+            -DCMAKE_BUILD_TYPE=Release
+
+          make -j$(sysctl -n hw.ncpu) || true
+
+      - name: Checkout app source
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - name: Copy i2pd library
+        run: |
+          mkdir -p app/ios/Frameworks
+          # Copy built libraries when available
+          # cp i2pd/build-ios/*.a app/ios/Frameworks/
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Build app
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter build ios --release --no-codesign
+
+  # Signed release build (requires secrets)
+  build-signed-app:
+    runs-on: macos-14
+    needs: build-flutter-app
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ENABLE_SIGNING == 'true'
+    steps:
+      - name: Checkout app source
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Install Apple Certificate
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Create temporary keychain
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          # Import certificate
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+
+          # Create keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Import to keychain
+          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Install Provisioning Profile
+        env:
+          PROVISIONING_PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o $PP_PATH
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Install dependencies
+        run: |
+          flutter pub get
+          cd ios && pod install --repo-update
+
+      - name: Build signed iOS app
+        run: |
+          flutter build ipa --release \
+            --export-options-plist=ios/ExportOptions.plist
+
+      - name: Upload signed IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: i2pd-ios-signed
+          path: build/ios/ipa/*.ipa
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true

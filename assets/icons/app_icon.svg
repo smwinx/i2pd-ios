@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="purpleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#9C27B0;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#7B1FA2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="512" height="512" rx="102" fill="url(#purpleGrad)"/>
+  
+  <!-- i2p text -->
+  <text x="256" y="300" 
+        font-family="Arial, sans-serif" 
+        font-size="180" 
+        font-weight="bold" 
+        fill="white" 
+        text-anchor="middle">
+    i2p
+  </text>
+  
+  <!-- Network nodes decoration -->
+  <circle cx="128" cy="128" r="20" fill="rgba(255,255,255,0.3)"/>
+  <circle cx="384" cy="128" r="15" fill="rgba(255,255,255,0.2)"/>
+  <circle cx="128" cy="384" r="15" fill="rgba(255,255,255,0.2)"/>
+  <circle cx="384" cy="384" r="20" fill="rgba(255,255,255,0.3)"/>
+  
+  <!-- Connection lines -->
+  <line x1="148" y1="148" x2="256" y2="200" stroke="rgba(255,255,255,0.2)" stroke-width="3"/>
+  <line x1="364" y1="148" x2="256" y2="200" stroke="rgba(255,255,255,0.2)" stroke-width="3"/>
+  <line x1="148" y1="364" x2="256" y2="320" stroke="rgba(255,255,255,0.2)" stroke-width="3"/>
+  <line x1="364" y1="364" x2="256" y2="320" stroke="rgba(255,255,255,0.2)" stroke-width="3"/>
+</svg>
