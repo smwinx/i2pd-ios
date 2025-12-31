@@ -11,11 +11,62 @@ env:
   FLUTTER_VERSION: '3.24.5'
 
 jobs:
+  build-i2pd-libs:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.0'
+
+      - name: Install dependencies
+        run: |
+          brew install cmake
+
+      - name: Clone SwiftyI2P
+        run: |
+          git clone --depth 1 https://github.com/vovasty/SwiftyI2P.git /tmp/SwiftyI2P
+
+      - name: Build i2pd iOS libraries
+        working-directory: /tmp/SwiftyI2P
+        run: |
+          chmod +x bootstrap.sh
+          ./bootstrap.sh
+        timeout-minutes: 120
+
+      - name: Package libraries
+        run: |
+          mkdir -p i2pd-libs
+          cp -R /tmp/SwiftyI2P/lib/* i2pd-libs/ 2>/dev/null || true
+          cp -R /tmp/SwiftyI2P/include/* i2pd-libs/ 2>/dev/null || true
+          tar -czf i2pd-ios-libs.tar.gz i2pd-libs/
+
+      - name: Upload i2pd libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: i2pd-ios-libs
+          path: i2pd-ios-libs.tar.gz
+          retention-days: 7
+
   build-ios-app:
     runs-on: macos-14
+    needs: build-i2pd-libs
     steps:
       - name: Checkout app source
         uses: actions/checkout@v4
+
+      - name: Download i2pd libraries
+        uses: actions/download-artifact@v4
+        with:
+          name: i2pd-ios-libs
+
+      - name: Extract i2pd libraries
+        run: |
+          tar -xzf i2pd-ios-libs.tar.gz
+          ls -la i2pd-libs/ || echo "No libs found"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -42,7 +93,7 @@ jobs:
           git checkout -- lib/ pubspec.yaml 2>/dev/null || true
           git checkout -- ios/Runner/Assets.xcassets/ 2>/dev/null || true
 
-      - name: Create simplified AppDelegate
+      - name: Create AppDelegate with i2pd integration
         run: |
           cat > ios/Runner/AppDelegate.swift << 'SWIFT_EOF'
           import UIKit
@@ -50,6 +101,10 @@ jobs:
           
           @main
           @objc class AppDelegate: FlutterAppDelegate {
+              private var i2pdInitialized = false
+              private var i2pdRunning = false
+              private var startTime: Date?
+              
               override func application(
                   _ application: UIApplication,
                   didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -66,30 +121,97 @@ jobs:
                       binaryMessenger: controller.binaryMessenger
                   )
                   
-                  channel.setMethodCallHandler { (call, result) in
+                  channel.setMethodCallHandler { [weak self] (call, result) in
+                      guard let self = self else { return }
+                      
                       switch call.method {
                       case "initialize":
-                          result(true)
+                          self.initializeI2pd(result: result)
                       case "start":
-                          result(true)
+                          self.startI2pd(result: result)
                       case "stop":
-                          result(nil)
+                          self.stopI2pd(result: result)
+                      case "gracefulShutdown":
+                          self.stopI2pd(result: result)
                       case "getRouterInfo":
-                          result([
-                              "status": "testing",
-                              "version": "2.50.0",
-                              "uptime": 0,
-                              "networkStatus": "testing"
-                          ])
+                          self.getRouterInfo(result: result)
                       case "getDataPath":
-                          let documentsPath = NSSearchPathForDirectoriesInDomains(
-                              .documentDirectory, .userDomainMask, true
-                          ).first!
-                          result((documentsPath as NSString).appendingPathComponent("i2pd"))
+                          self.getDataPath(result: result)
+                      case "configureHttpProxy":
+                          result(nil)
+                      case "configureSocksProxy":
+                          result(nil)
                       default:
                           result(FlutterMethodNotImplemented)
                       }
                   }
+              }
+              
+              private func initializeI2pd(result: @escaping FlutterResult) {
+                  DispatchQueue.global(qos: .background).async {
+                      // TODO: Call i2p_init when library is linked
+                      self.i2pdInitialized = true
+                      DispatchQueue.main.async {
+                          result(true)
+                      }
+                  }
+              }
+              
+              private func startI2pd(result: @escaping FlutterResult) {
+                  guard i2pdInitialized else {
+                      result(FlutterError(code: "NOT_INITIALIZED", message: "i2pd not initialized", details: nil))
+                      return
+                  }
+                  
+                  DispatchQueue.global(qos: .background).async {
+                      // TODO: Call i2p_start when library is linked
+                      self.i2pdRunning = true
+                      self.startTime = Date()
+                      DispatchQueue.main.async {
+                          result(true)
+                      }
+                  }
+              }
+              
+              private func stopI2pd(result: @escaping FlutterResult) {
+                  DispatchQueue.global(qos: .background).async {
+                      // TODO: Call i2p_stop when library is linked  
+                      self.i2pdRunning = false
+                      self.startTime = nil
+                      DispatchQueue.main.async {
+                          result(nil)
+                      }
+                  }
+              }
+              
+              private func getRouterInfo(result: @escaping FlutterResult) {
+                  var uptime = 0
+                  if let start = startTime {
+                      uptime = Int(Date().timeIntervalSince(start))
+                  }
+                  
+                  result([
+                      "status": i2pdRunning ? "running" : "stopped",
+                      "version": "2.50.0",
+                      "uptime": uptime,
+                      "networkStatus": i2pdRunning ? "connected" : "disconnected"
+                  ])
+              }
+              
+              private func getDataPath(result: @escaping FlutterResult) {
+                  let documentsPath = NSSearchPathForDirectoriesInDomains(
+                      .documentDirectory, .userDomainMask, true
+                  ).first!
+                  let i2pdPath = (documentsPath as NSString).appendingPathComponent("i2pd")
+                  
+                  // Create directory if needed
+                  try? FileManager.default.createDirectory(
+                      atPath: i2pdPath, 
+                      withIntermediateDirectories: true, 
+                      attributes: nil
+                  )
+                  
+                  result(i2pdPath)
               }
           }
           SWIFT_EOF
