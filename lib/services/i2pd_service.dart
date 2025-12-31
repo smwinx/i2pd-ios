@@ -161,14 +161,14 @@ class I2pdService extends ChangeNotifier {
   void setHttpProxy(bool enabled, {int? port}) {
     _httpProxyEnabled = enabled;
     if (port != null) _httpProxyPort = port;
-    _bridge.configureHttpProxy(enabled, _httpProxyPort);
+    _bridge.configureHttpProxy(enabled: enabled, port: _httpProxyPort);
     notifyListeners();
   }
 
   void setSocksProxy(bool enabled, {int? port}) {
     _socksProxyEnabled = enabled;
     if (port != null) _socksProxyPort = port;
-    _bridge.configureSocksProxy(enabled, _socksProxyPort);
+    _bridge.configureSocksProxy(enabled: enabled, port: _socksProxyPort);
     notifyListeners();
   }
 
