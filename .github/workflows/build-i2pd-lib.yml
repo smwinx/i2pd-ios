@@ -44,8 +44,16 @@ jobs:
         run: |
           cd ~
           git clone --depth 1 https://github.com/leetal/ios-cmake.git
+          # The toolchain is at toolchain/ios.toolchain.cmake (like SwiftyI2P uses)
           echo "IOS_TOOLCHAIN=$HOME/ios-cmake/ios.toolchain.cmake" >> $GITHUB_ENV
           ls -la ~/ios-cmake/
+          ls -la ~/ios-cmake/*.cmake 2>/dev/null || true
+          # If toolchain folder exists, use that path
+          if [ -f "$HOME/ios-cmake/toolchain/ios.toolchain.cmake" ]; then
+            echo "Found toolchain at ios-cmake/toolchain/"
+            echo "IOS_TOOLCHAIN=$HOME/ios-cmake/toolchain/ios.toolchain.cmake" >> $GITHUB_ENV
+          fi
+          cat $GITHUB_ENV
 
       # ==============================================================
       # BUILD OPENSSL FOR iOS arm64
@@ -158,41 +166,125 @@ jobs:
           ls libi2pd/*.cpp | wc -l
           echo "=== libi2pd_client sources ==="
           ls libi2pd_client/*.cpp | wc -l
+          
+      # Create custom TargetArch.cmake that supports arm64 (like SwiftyI2P does)
+      - name: Create custom TargetArch.cmake for iOS
+        run: |
+          cat > ~/TargetArch.cmake << 'TARGETARCH'
+          # Based on Qt 5 processor detection - handles arm64 for iOS cross-compile
+          set(archdetect_c_code "
+          #if defined(__arm__) || defined(__TARGET_ARCH_ARM)
+              #if defined(__ARM_ARCH_7__) || defined(__ARM_ARCH_7A__) || defined(__ARM_ARCH_7R__) || defined(__ARM_ARCH_7M__) || (defined(__TARGET_ARCH_ARM) && __TARGET_ARCH_ARM-0 >= 7)
+                  #error cmake_ARCH armv7
+              #elif defined(__ARM_ARCH_6__) || defined(__ARM_ARCH_6J__) || defined(__ARM_ARCH_6T2__) || defined(__ARM_ARCH_6Z__) || defined(__ARM_ARCH_6K__) || defined(__ARM_ARCH_6ZK__) || defined(__ARM_ARCH_6M__) || (defined(__TARGET_ARCH_ARM) && __TARGET_ARCH_ARM-0 >= 6)
+                  #error cmake_ARCH armv6
+              #elif defined(__ARM_ARCH_5TEJ__) || (defined(__TARGET_ARCH_ARM) && __TARGET_ARCH_ARM-0 >= 5)
+                  #error cmake_ARCH armv5
+              #else
+                  #error cmake_ARCH arm
+              #endif
+          #elif defined(__aarch64__) || defined(_M_ARM64)
+              #error cmake_ARCH arm64
+          #elif defined(__i386) || defined(__i386__) || defined(_M_IX86)
+              #error cmake_ARCH i386
+          #elif defined(__x86_64) || defined(__x86_64__) || defined(__amd64) || defined(_M_X64)
+              #error cmake_ARCH x86_64
+          #elif defined(__ia64) || defined(__ia64__) || defined(_M_IA64)
+              #error cmake_ARCH ia64
+          #elif defined(__ppc__) || defined(__ppc) || defined(__powerpc__) || defined(_ARCH_COM) || defined(_ARCH_PWR) || defined(_ARCH_PPC) || defined(_M_MPPC) || defined(_M_PPC)
+              #if defined(__ppc64__) || defined(__powerpc64__) || defined(__64BIT__)
+                  #error cmake_ARCH ppc64
+              #else
+                  #error cmake_ARCH ppc
+              #endif
+          #endif
+          #error cmake_ARCH unknown
+          ")
+
+          function(target_architecture output_var)
+              if(APPLE AND CMAKE_OSX_ARCHITECTURES)
+                  foreach(osx_arch \${CMAKE_OSX_ARCHITECTURES})
+                      if("\${osx_arch}" STREQUAL "arm64")
+                          set(osx_arch_arm64 TRUE)
+                      elseif("\${osx_arch}" STREQUAL "x86_64")
+                          set(osx_arch_x86_64 TRUE)
+                      elseif("\${osx_arch}" STREQUAL "i386")
+                          set(osx_arch_i386 TRUE)
+                      endif()
+                  endforeach()
+
+                  if(osx_arch_arm64)
+                      list(APPEND ARCH arm64)
+                  endif()
+                  if(osx_arch_x86_64)
+                      list(APPEND ARCH x86_64)
+                  endif()
+                  if(osx_arch_i386)
+                      list(APPEND ARCH i386)
+                  endif()
+              else()
+                  file(WRITE "\${CMAKE_BINARY_DIR}/arch.c" "\${archdetect_c_code}")
+                  enable_language(C)
+                  try_run(run_result_unused compile_result_unused "\${CMAKE_BINARY_DIR}" "\${CMAKE_BINARY_DIR}/arch.c"
+                      COMPILE_OUTPUT_VARIABLE ARCH CMAKE_FLAGS CMAKE_OSX_ARCHITECTURES=\${CMAKE_OSX_ARCHITECTURES})
+                  string(REGEX MATCH "cmake_ARCH ([a-zA-Z0-9_]+)" ARCH "\${ARCH}")
+                  string(REPLACE "cmake_ARCH " "" ARCH "\${ARCH}")
+                  if (NOT ARCH)
+                      set(ARCH unknown)
+                  endif()
+              endif()
+              set(\${output_var} "\${ARCH}" PARENT_SCOPE)
+          endfunction()
+          TARGETARCH
+          
+          echo "=== Custom TargetArch.cmake created ==="
+          cat ~/TargetArch.cmake
 
       - name: Build i2pd with CMake for iOS
         run: |
           cd ~/i2pd-src
           
-          echo "=== Creating CMake build directory ==="
-          mkdir -p build-ios
-          cd build-ios
+          # Copy custom TargetArch.cmake to i2pd cmake_modules (like SwiftyI2P does)
+          echo "=== Copying custom TargetArch.cmake to cmake_modules ==="
+          cp -f ~/TargetArch.cmake build/cmake_modules/TargetArch.cmake
+          cat build/cmake_modules/TargetArch.cmake | head -20
+          
+          # Create output directory
+          mkdir -p ~/output
+          
+          # SwiftyI2P runs cmake from INSIDE the i2pd build directory
+          cd build
+          echo "=== Working directory: $(pwd) ==="
           
           echo "=== Configuring i2pd with CMake for iOS arm64 ==="
-          cmake ../build \
-            -DCMAKE_TOOLCHAIN_FILE=$HOME/ios-cmake/ios.toolchain.cmake \
-            -DPLATFORM=OS64 \
-            -DDEPLOYMENT_TARGET=${IOS_MIN_VERSION} \
+          # Use exact SwiftyI2P cmake flags
+          cmake -DPLATFORM=OS64 \
             -DCMAKE_BUILD_TYPE=Release \
-            -DWITH_STATIC=ON \
-            -DWITH_BINARY=OFF \
+            -DCMAKE_TOOLCHAIN_FILE=$IOS_TOOLCHAIN \
+            -DWITH_STATIC=yes \
+            -DWITH_BINARY=no \
             -DWITH_UPNP=OFF \
+            -DDEPLOYMENT_TARGET=${IOS_MIN_VERSION} \
+            -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY=$HOME/output \
+            -DOPENSSL_INCLUDE_DIR=$HOME/deps/include \
             -DBoost_INCLUDE_DIR=$HOME/deps/include \
             -DBoost_LIBRARY_DIR=$HOME/deps/lib \
-            -DOPENSSL_ROOT_DIR=$HOME/deps \
-            -DOPENSSL_INCLUDE_DIR=$HOME/deps/include \
-            -DOPENSSL_SSL_LIBRARY=$HOME/deps/lib/libssl.a \
-            -DOPENSSL_CRYPTO_LIBRARY=$HOME/deps/lib/libcrypto.a \
-            -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY=$HOME/output
+            -DOPENSSL_SSL_LIBRARY=libssl.a \
+            -DOPENSSL_CRYPTO_LIBRARY=libcrypto.a \
+            . 2>&1 | tee cmake_config.log
           
-          echo "=== Building i2pd ==="
-          cmake --build . --config Release -j$(sysctl -n hw.ncpu) 2>&1 || {
-            echo "CMake build failed, trying manual compilation..."
+          echo "=== CMake configuration complete ==="
+          echo "=== Building with make (like SwiftyI2P) ==="
+          make -j$(sysctl -n hw.ncpu) VERBOSE=1 2>&1 | tee build.log || {
+            echo "=== Build failed, showing last 100 lines ==="
+            tail -100 build.log
             exit 1
           }
           
           echo "=== i2pd build complete ==="
           ls -la $HOME/output/ 2>/dev/null || ls -la
           find . -name "*.a" -exec ls -la {} \;
+          find ~/output -name "*.a" -exec ls -la {} \; 2>/dev/null || true
 
       - name: Manual i2pd compilation fallback
         if: failure()
