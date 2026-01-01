@@ -54,28 +54,55 @@ require_macos_tools() {
 }
 
 fetch_sources() {
+    echo "=== fetch_sources: Starting ==="
+    echo "I2PD_SRC=$I2PD_SRC"
+    echo "IOS_CMAKE_DIR=$IOS_CMAKE_DIR"
+    echo "OPENSSL_SRC=$OPENSSL_SRC"
+    echo "BOOST_SRC=$BOOST_SRC"
+    
     if [ ! -d "$I2PD_SRC" ]; then
         echo "Cloning i2pd $I2PD_VERSION..."
-        git -C "$DEPS_DIR" clone --depth 1 --branch "$I2PD_VERSION" https://github.com/PurpleI2P/i2pd.git
+        git -C "$DEPS_DIR" clone --depth 1 --branch "$I2PD_VERSION" https://github.com/PurpleI2P/i2pd.git || {
+            echo "ERROR: Failed to clone i2pd"
+            exit 1
+        }
+    else
+        echo "i2pd already exists at $I2PD_SRC"
     fi
 
     if [ ! -d "$IOS_CMAKE_DIR" ]; then
         echo "Cloning ios-cmake ($IOS_CMAKE_COMMIT)..."
-        git -C "$DEPS_DIR" clone https://github.com/vovasty/ios-cmake.git
+        git -C "$DEPS_DIR" clone https://github.com/vovasty/ios-cmake.git || {
+            echo "ERROR: Failed to clone ios-cmake"
+            exit 1
+        }
         if [ "$IOS_CMAKE_COMMIT" != "master" ]; then
             git -C "$IOS_CMAKE_DIR" checkout "$IOS_CMAKE_COMMIT"
         fi
+    else
+        echo "ios-cmake already exists at $IOS_CMAKE_DIR"
     fi
 
     if [ ! -d "$OPENSSL_SRC" ]; then
         echo "Fetching OpenSSL $OPENSSL_VERSION..."
-        (cd "$DEPS_DIR" && curl -LO "https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz" && tar xzf "openssl-$OPENSSL_VERSION.tar.gz")
+        (cd "$DEPS_DIR" && curl -fLO "https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz" && tar xzf "openssl-$OPENSSL_VERSION.tar.gz") || {
+            echo "ERROR: Failed to fetch OpenSSL"
+            exit 1
+        }
+    else
+        echo "OpenSSL already exists at $OPENSSL_SRC"
     fi
 
     if [ ! -d "$BOOST_SRC" ]; then
         echo "Fetching Boost $BOOST_VERSION..."
-        (cd "$DEPS_DIR" && curl -LO "https://boostorg.jfrog.io/artifactory/main/release/$BOOST_VERSION/source/boost_${BOOST_VERSION//./_}.tar.gz" && tar xzf "boost_${BOOST_VERSION//./_}.tar.gz")
+        (cd "$DEPS_DIR" && curl -fLO "https://boostorg.jfrog.io/artifactory/main/release/$BOOST_VERSION/source/boost_${BOOST_VERSION//./_}.tar.gz" && tar xzf "boost_${BOOST_VERSION//./_}.tar.gz") || {
+            echo "ERROR: Failed to fetch Boost"
+            exit 1
+        }
+    else
+        echo "Boost already exists at $BOOST_SRC"
     fi
+    echo "=== fetch_sources: Complete ==="
 }
 
 build_openssl_platform() {

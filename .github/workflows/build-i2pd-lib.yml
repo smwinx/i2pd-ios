@@ -37,9 +37,10 @@ jobs:
           BOOST_VERSION: ${{ env.BOOST_VERSION }}
           IOS_MIN_VERSION: ${{ env.IOS_MIN_VERSION }}
         run: |
+          set -x
           cd scripts
           chmod +x build_i2pd_ios.sh
-          ./build_i2pd_ios.sh
+          bash -x ./build_i2pd_ios.sh
 
       - name: Generate podspec
         run: |
