@@ -1,15 +1,12 @@
 name: Build iOS App
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+  # Only run after lib workflow completes, or manually
   workflow_run:
     workflows: ["Build i2pd iOS Library"]
     types:
       - completed
+  workflow_dispatch:
 
 env:
   FLUTTER_VERSION: '3.24.5'
@@ -17,6 +14,8 @@ env:
 jobs:
   build-ios-app:
     runs-on: macos-14
+    # Only run if lib workflow succeeded (or manual trigger)
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Checkout app source
         uses: actions/checkout@v4

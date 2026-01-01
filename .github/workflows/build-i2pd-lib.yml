@@ -3,8 +3,10 @@ name: Build i2pd iOS Library
 on:
   workflow_dispatch:
   push:
+    branches: [ main ]
     paths:
       - '.github/workflows/build-i2pd-lib.yml'
+      - 'scripts/build_i2pd_ios.sh'
 
 env:
   OPENSSL_VERSION: '3.0.12'
