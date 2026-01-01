@@ -11,7 +11,7 @@ on:
 env:
   OPENSSL_VERSION: '3.0.12'
   BOOST_VERSION: '1.84.0'
-  I2PD_VERSION: '2.58.0'
+  I2PD_VERSION: '2.50.2'
   IOS_MIN_VERSION: '14.0'
 
 jobs:
