@@ -1,0 +1,17 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Shell scripts must use LF line endings
+*.sh text eol=lf
+
+# Batch scripts use CRLF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Swift and Dart files
+*.swift text eol=lf
+*.dart text eol=lf
+
+# YAML files
+*.yml text eol=lf
+*.yaml text eol=lf

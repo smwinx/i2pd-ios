@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # i2pd iOS Build Script (device + simulator) aligned with official docs:
 # https://docs.i2pd.website/en/latest/devs/building/ios/
 
@@ -283,9 +283,9 @@ main() {
     echo "Headers:  $OUTPUT_DIR/include"
     echo "========================================"
     echo "Next steps (per upstream docs):"
-    echo "  • Link libi2pd.a and libi2pdclient.a plus libssl/libcrypto and Boost libs in Xcode"
-    echo "  • Add $OUTPUT_DIR/include to Header Search Paths"
-    echo "  • Add libc++ and libz system libs"
+    echo "  â€¢ Link libi2pd.a and libi2pdclient.a plus libssl/libcrypto and Boost libs in Xcode"
+    echo "  â€¢ Add $OUTPUT_DIR/include to Header Search Paths"
+    echo "  â€¢ Add libc++ and libz system libs"
 }
 
 main "$@"
