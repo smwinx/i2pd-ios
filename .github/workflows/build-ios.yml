@@ -25,7 +25,7 @@ jobs:
         uses: dawidd6/action-download-artifact@v6
         with:
           workflow: build-i2pd-lib.yml
-          name: i2pd-ios-libs
+          name: i2pd-ios-arm64-libs
           path: ios/Libraries
           if_no_artifact_found: warn
         continue-on-error: true
