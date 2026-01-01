@@ -1,9 +1,9 @@
 #!/bin/bash
 # i2pd iOS Build Script (device + simulator) aligned with official docs:
 # https://docs.i2pd.website/en/latest/devs/building/ios/
-# Simplified: removed -u flag, use simple string variables
+# Use only set -e for simplicity (matches working old script)
 
-set -eo pipefail
+set -e
 
 # Debug: print all environment info upfront
 echo "=== DEBUG: Script Startup ==="
@@ -11,8 +11,6 @@ echo "Bash version: $BASH_VERSION"
 echo "Script: $0"
 echo "PWD: $(pwd)"
 echo "Arguments: $*"
-echo "=== Environment Variables ==="
-env | grep -E "^(I2PD|OPENSSL|BOOST|IOS)" || echo "(none set)"
 echo "=== End Debug ==="
 
 # Versions (with defaults)
