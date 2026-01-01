@@ -25,7 +25,7 @@ jobs:
         uses: dawidd6/action-download-artifact@v6
         with:
           workflow: build-i2pd-lib.yml
-          name: i2pd-ios-libs
+          name: i2pd-ios-arm64-libs
           path: ios/Libraries
           if_no_artifact_found: warn
         continue-on-error: true
@@ -67,9 +67,14 @@ jobs:
 
       - name: Create simplified AppDelegate
         run: |
-          # Check if real library exists
-          if [ -f "ios/Libraries/i2pd.xcframework/ios-arm64/libi2pd_combined.a" ] || [ -d "ios/Libraries/i2pd.xcframework" ]; then
-            echo "Found i2pd library, creating bridged AppDelegate..."
+          echo "=== Checking for downloaded i2pd library ==="
+          ls -laR ios/Libraries/ 2>/dev/null || echo "No Libraries directory"
+          
+          # Check if real library exists (check for .a files in lib subdirectory)
+          if [ -f "ios/Libraries/lib/libi2pd.a" ] || [ -f "ios/Libraries/lib/libssl.a" ] || find ios/Libraries -name "*.a" 2>/dev/null | head -1 | grep -q .; then
+            echo "Found i2pd library files, creating real AppDelegate..."
+            
+            HAS_I2PD_LIB="true"
             
             # Create bridging header for C wrapper
             cat > ios/Runner/Runner-Bridging-Header.h << 'BRIDGE_EOF'
