@@ -110,10 +110,11 @@ fetch_sources() {
 
 build_openssl_platform() {
     local platform="$1"   # iphoneos or iphonesimulator
-    local archs=(${@:2})
+    shift
+    local archs="$*"      # remaining args as string
     local out_dir="$DEPS_DIR/openssl-$platform"
 
-    echo "Building OpenSSL for $platform (${archs[*]})..."
+    echo "Building OpenSSL for $platform ($archs)..."
     mkdir -p "$out_dir"
     pushd "$OPENSSL_SRC" >/dev/null
 
@@ -134,12 +135,13 @@ build_openssl_platform() {
 
 build_boost_platform() {
     local platform="$1"   # iphoneos or iphonesimulator
-    local archs=(${@:2})
+    shift
+    local archs="$*"      # remaining args as string
     local out_dir="$DEPS_DIR/boost-$platform"
     local sdk_path
     sdk_path=$(xcrun --sdk "$platform" --show-sdk-path)
 
-    echo "Building Boost for $platform (${archs[*]})..."
+    echo "Building Boost for $platform ($archs)..."
     mkdir -p "$out_dir"
     pushd "$BOOST_SRC" >/dev/null
 
