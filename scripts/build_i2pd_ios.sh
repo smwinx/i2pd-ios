@@ -4,14 +4,14 @@
 
 set -euo pipefail
 
-# Versions
-I2PD_VERSION="2.58.0"
-OPENSSL_VERSION="3.0.12"
-BOOST_VERSION="1.84.0"
-IOS_CMAKE_COMMIT="master" # keep in sync with https://github.com/vovasty/ios-cmake
+# Versions - use environment variables if set, otherwise use defaults
+I2PD_VERSION="${I2PD_VERSION:-2.58.0}"
+OPENSSL_VERSION="${OPENSSL_VERSION:-3.0.12}"
+BOOST_VERSION="${BOOST_VERSION:-1.84.0}"
+IOS_CMAKE_COMMIT="${IOS_CMAKE_COMMIT:-master}" # keep in sync with https://github.com/vovasty/ios-cmake
 
 # SDK / arch settings
-IOS_MIN_VERSION="14.0"
+IOS_MIN_VERSION="${IOS_MIN_VERSION:-14.0}"
 DEVICE_ARCHS=(arm64)
 SIM_ARCHS=(arm64 x86_64)
 
