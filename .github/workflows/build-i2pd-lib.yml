@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/build-i2pd-lib.yml'
 
+# Build actual i2pd library with all networking code for iOS arm64
 env:
   OPENSSL_VERSION: '3.0.12'
   BOOST_VERSION: '1.84.0'
