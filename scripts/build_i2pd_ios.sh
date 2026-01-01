@@ -186,37 +186,37 @@ copy_headers() {
     mkdir -p "$OUTPUT_DIR/include/i2pd"
     cp -R "$I2PD_SRC/libi2pd" "$OUTPUT_DIR/include/" 2>/dev/null || true
     cp -R "$I2PD_SRC/libi2pd_client" "$OUTPUT_DIR/include/" 2>/dev/null || true
-        cp -R "$I2PD_SRC/libi2pd_wrapper" "$OUTPUT_DIR/include/" 2>/dev/null || true
+    cp -R "$I2PD_SRC/libi2pd_wrapper" "$OUTPUT_DIR/include/" 2>/dev/null || true
     cp -R "$DEPS_DIR/openssl-iphoneos/include/openssl" "$OUTPUT_DIR/include/" 2>/dev/null || true
     cp -R "$BOOST_SRC/boost" "$OUTPUT_DIR/include/" 2>/dev/null || true
 }
 
-    build_wrapper_platform() {
-        local platform_name="$1"   # iphoneos or iphonesimulator
-        local build_dir="$WORK_DIR/wrapper-$platform_name"
-        local sdk_path
-        sdk_path=$(xcrun --sdk "$platform_name" --show-sdk-path)
+build_wrapper_platform() {
+    local platform_name="$1"   # iphoneos or iphonesimulator
+    local build_dir="$WORK_DIR/wrapper-$platform_name"
+    local sdk_path
+    sdk_path=$(xcrun --sdk "$platform_name" --show-sdk-path)
 
-        echo "Building i2pd wrapper for $platform_name..."
-        mkdir -p "$build_dir"
-        pushd "$I2PD_SRC/libi2pd_wrapper" >/dev/null
+    echo "Building i2pd wrapper for $platform_name..."
+    mkdir -p "$build_dir"
+    pushd "$I2PD_SRC/libi2pd_wrapper" >/dev/null
 
-        local cxx
-        cxx=$(xcrun --sdk "$platform_name" --find clang++)
-        local cflags="-std=c++17 -fembed-bitcode -O2 -mios-version-min=$IOS_MIN_VERSION -isysroot $sdk_path"
-        local includes="-I$I2PD_SRC/libi2pd -I$I2PD_SRC/libi2pd_client -I$DEPS_DIR/openssl-$platform_name/include -I$BOOST_SRC"
+    local cxx
+    cxx=$(xcrun --sdk "$platform_name" --find clang++)
+    local cflags="-std=c++17 -fembed-bitcode -O2 -mios-version-min=$IOS_MIN_VERSION -isysroot $sdk_path"
+    local includes="-I$I2PD_SRC/libi2pd -I$I2PD_SRC/libi2pd_client -I$DEPS_DIR/openssl-$platform_name/include -I$BOOST_SRC"
 
-        rm -f "$build_dir"/*.o
-        for src in *.cpp; do
-            [ -f "$src" ] || continue
-            obj="$build_dir/${src%.cpp}.o"
-            echo "  compiling $src"
-            "$cxx" $cflags $includes -c "$src" -o "$obj"
-        done
+    rm -f "$build_dir"/*.o
+    for src in *.cpp; do
+        [ -f "$src" ] || continue
+        obj="$build_dir/${src%.cpp}.o"
+        echo "  compiling $src"
+        "$cxx" $cflags $includes -c "$src" -o "$obj"
+    done
 
-        libtool -static -o "$build_dir/libi2pdwrapper.a" "$build_dir"/*.o
-        popd >/dev/null
-    }
+    libtool -static -o "$build_dir/libi2pdwrapper.a" "$build_dir"/*.o
+    popd >/dev/null
+}
 
 main() {
     require_macos_tools
@@ -231,8 +231,8 @@ main() {
     build_i2pd_platform SIMULATOR64 iphonesimulator
     build_i2pd_platform OS iphoneos
 
-        build_wrapper_platform iphoneos
-        build_wrapper_platform iphonesimulator
+    build_wrapper_platform iphoneos
+    build_wrapper_platform iphonesimulator
 
     combine_universal_libs
     copy_headers
