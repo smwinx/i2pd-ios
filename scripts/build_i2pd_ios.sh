@@ -53,7 +53,7 @@ build_openssl() {
         --prefix="$BUILD_DIR/openssl-ios" \
         -mios-version-min=$IOS_MIN_VERSION
     
-    make clean
+    make clean || true
     make -j$(sysctl -n hw.ncpu)
     make install_sw
     
@@ -136,13 +136,19 @@ clean:
 	rm -f $(OBJECTS) libi2pd.a
 EOF
     
-    # Build
+    # Build (clean may fail on first run, that's ok)
     make -f Makefile.ios \
         OPENSSL_INC="$BUILD_DIR/openssl-ios/include" \
         OPENSSL_LIB="$BUILD_DIR/openssl-ios/lib" \
         BOOST_INC="$BUILD_DIR/boost-ios/include" \
         BOOST_LIB="$BUILD_DIR/boost-ios/lib" \
-        clean libi2pd.a
+        clean || true
+    make -f Makefile.ios \
+        OPENSSL_INC="$BUILD_DIR/openssl-ios/include" \
+        OPENSSL_LIB="$BUILD_DIR/openssl-ios/lib" \
+        BOOST_INC="$BUILD_DIR/boost-ios/include" \
+        BOOST_LIB="$BUILD_DIR/boost-ios/lib" \
+        libi2pd.a
     
     echo "i2pd build complete"
 }
