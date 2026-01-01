@@ -8,7 +8,7 @@
 #ifndef Runner_Bridging_Header_h
 #define Runner_Bridging_Header_h
 
-// Import i2pd C API header
-// #import "i2pd_api.h"
+// Import i2pd wrapper C API header (built from libi2pd_wrapper)
+#import "libi2pd_wrapper/capi.h"
 
 #endif /* Runner_Bridging_Header_h */

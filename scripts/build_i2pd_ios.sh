@@ -1,266 +1,252 @@
 #!/bin/bash
-# i2pd iOS Build Script
-# Builds i2pd as a static library for iOS
+# i2pd iOS Build Script (device + simulator) aligned with official docs:
+# https://docs.i2pd.website/en/latest/devs/building/ios/
 
-set -e
+set -euo pipefail
 
-I2PD_VERSION="2.50.2"
+# Versions
+I2PD_VERSION="2.58.0"
 OPENSSL_VERSION="3.0.12"
 BOOST_VERSION="1.84.0"
+IOS_CMAKE_COMMIT="master" # keep in sync with https://github.com/vovasty/ios-cmake
+
+# SDK / arch settings
+IOS_MIN_VERSION="14.0"
+DEVICE_ARCHS=(arm64)
+SIM_ARCHS=(arm64 x86_64)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="$SCRIPT_DIR/build"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+WORK_DIR="$SCRIPT_DIR/.build"
+DEPS_DIR="$WORK_DIR/deps"
 OUTPUT_DIR="$SCRIPT_DIR/output"
 
-# iOS SDK settings
-IOS_MIN_VERSION="14.0"
+IOS_CMAKE_DIR="$DEPS_DIR/ios-cmake"
+I2PD_SRC="$DEPS_DIR/i2pd"
+OPENSSL_SRC="$DEPS_DIR/openssl-$OPENSSL_VERSION"
+BOOST_SRC="$DEPS_DIR/boost_${BOOST_VERSION//./_}"
 
-# Architectures
-ARCHS="arm64"
+mkdir -p "$WORK_DIR" "$DEPS_DIR" "$OUTPUT_DIR/lib" "$OUTPUT_DIR/include"
 
 echo "========================================"
-echo "i2pd iOS Static Library Build Script"
+echo "i2pd iOS Build Script"
+echo "Versions: i2pd=$I2PD_VERSION, OpenSSL=$OPENSSL_VERSION, Boost=$BOOST_VERSION"
+echo "Output:   $OUTPUT_DIR"
 echo "========================================"
 
-# Create directories
-mkdir -p "$BUILD_DIR"
-mkdir -p "$OUTPUT_DIR/lib"
-mkdir -p "$OUTPUT_DIR/include"
-
-# Clone i2pd if not present
-if [ ! -d "$BUILD_DIR/i2pd" ]; then
-    echo "Cloning i2pd..."
-    git clone --depth 1 --branch $I2PD_VERSION https://github.com/PurpleI2P/i2pd.git "$BUILD_DIR/i2pd"
-fi
-
-# Build OpenSSL for iOS
-build_openssl() {
-    echo "Building OpenSSL $OPENSSL_VERSION for iOS..."
-    
-    if [ ! -d "$BUILD_DIR/openssl-$OPENSSL_VERSION" ]; then
-        cd "$BUILD_DIR"
-        curl -LO "https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz"
-        tar xzf "openssl-$OPENSSL_VERSION.tar.gz"
+require_macos_tools() {
+    if ! command -v xcrun >/dev/null 2>&1; then
+        echo "Xcode Command Line Tools are required (xcrun not found)." >&2
+        exit 1
     fi
-    
-    cd "$BUILD_DIR/openssl-$OPENSSL_VERSION"
-    
-    export CROSS_TOP="$(xcrun --sdk iphoneos --show-sdk-platform-path)/Developer"
-    export CROSS_SDK="$(xcrun --sdk iphoneos --show-sdk-path | xargs basename)"
-    export PATH="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin:$PATH"
-    
-    ./Configure ios64-xcrun no-shared no-tests \
-        --prefix="$BUILD_DIR/openssl-ios" \
-        -mios-version-min=$IOS_MIN_VERSION
-    
-    make clean
-    make -j$(sysctl -n hw.ncpu)
-    make install_sw
-    
-    echo "OpenSSL build complete"
 }
 
-# Build Boost for iOS
-build_boost() {
-    echo "Building Boost $BOOST_VERSION for iOS..."
-    
-    BOOST_VERSION_UNDERSCORE="${BOOST_VERSION//./_}"
-    
-    if [ ! -d "$BUILD_DIR/boost_$BOOST_VERSION_UNDERSCORE" ]; then
-        cd "$BUILD_DIR"
-        curl -LO "https://boostorg.jfrog.io/artifactory/main/release/$BOOST_VERSION/source/boost_$BOOST_VERSION_UNDERSCORE.tar.gz"
-        tar xzf "boost_$BOOST_VERSION_UNDERSCORE.tar.gz"
+fetch_sources() {
+    if [ ! -d "$I2PD_SRC" ]; then
+        echo "Cloning i2pd $I2PD_VERSION..."
+        git -C "$DEPS_DIR" clone --depth 1 --branch "$I2PD_VERSION" https://github.com/PurpleI2P/i2pd.git
     fi
-    
-    cd "$BUILD_DIR/boost_$BOOST_VERSION_UNDERSCORE"
-    
-    # Bootstrap
-    ./bootstrap.sh
-    
-    # Create user-config.jam for iOS
+
+    if [ ! -d "$IOS_CMAKE_DIR" ]; then
+        echo "Cloning ios-cmake ($IOS_CMAKE_COMMIT)..."
+        git -C "$DEPS_DIR" clone https://github.com/vovasty/ios-cmake.git
+        if [ "$IOS_CMAKE_COMMIT" != "master" ]; then
+            git -C "$IOS_CMAKE_DIR" checkout "$IOS_CMAKE_COMMIT"
+        fi
+    fi
+
+    if [ ! -d "$OPENSSL_SRC" ]; then
+        echo "Fetching OpenSSL $OPENSSL_VERSION..."
+        (cd "$DEPS_DIR" && curl -LO "https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz" && tar xzf "openssl-$OPENSSL_VERSION.tar.gz")
+    fi
+
+    if [ ! -d "$BOOST_SRC" ]; then
+        echo "Fetching Boost $BOOST_VERSION..."
+        (cd "$DEPS_DIR" && curl -LO "https://boostorg.jfrog.io/artifactory/main/release/$BOOST_VERSION/source/boost_${BOOST_VERSION//./_}.tar.gz" && tar xzf "boost_${BOOST_VERSION//./_}.tar.gz")
+    fi
+}
+
+build_openssl_platform() {
+    local platform="$1"   # iphoneos or iphonesimulator
+    local archs=(${@:2})
+    local out_dir="$DEPS_DIR/openssl-$platform"
+
+    echo "Building OpenSSL for $platform (${archs[*]})..."
+    mkdir -p "$out_dir"
+    pushd "$OPENSSL_SRC" >/dev/null
+
+    make clean || true
+
+    local target="ios64-xcrun"
+    [[ "$platform" == "iphonesimulator" ]] && target="iossimulator-xcrun"
+
+    ./Configure "$target" no-shared no-tests \
+        --prefix="$out_dir" \
+        -mios-version-min="$IOS_MIN_VERSION"
+
+    # shellcheck disable=SC2046
+    make -j$(sysctl -n hw.ncpu)
+    make install_sw
+    popd >/dev/null
+}
+
+build_boost_platform() {
+    local platform="$1"   # iphoneos or iphonesimulator
+    local archs=(${@:2})
+    local out_dir="$DEPS_DIR/boost-$platform"
+    local sdk_path
+    sdk_path=$(xcrun --sdk "$platform" --show-sdk-path)
+
+    echo "Building Boost for $platform (${archs[*]})..."
+    mkdir -p "$out_dir"
+    pushd "$BOOST_SRC" >/dev/null
+
+    ./bootstrap.sh >/dev/null
+
     cat > user-config.jam << EOF
-using darwin : ios
-: xcrun --sdk iphoneos clang++ -arch arm64 -mios-version-min=$IOS_MIN_VERSION -fembed-bitcode-marker
-: <striper> <root>$(xcrun --sdk iphoneos --show-sdk-path)
-;
+using darwin : ios : xcrun --sdk $platform clang++ : <striper> <root>$sdk_path ;
 EOF
-    
+
+    # shellcheck disable=SC2046
     ./b2 -j$(sysctl -n hw.ncpu) \
         --user-config=user-config.jam \
         toolset=darwin-ios \
         target-os=iphone \
-        architecture=arm \
         address-model=64 \
-        link=static \
-        runtime-link=static \
-        --with-system \
-        --with-filesystem \
-        --with-program_options \
-        --with-date_time \
-        --prefix="$BUILD_DIR/boost-ios" \
-        install
-    
-    echo "Boost build complete"
+        architecture=arm \
+        link=static runtime-link=static \
+        cflags="-fembed-bitcode -mios-version-min=$IOS_MIN_VERSION" \
+        cxxflags="-std=c++17 -fembed-bitcode -mios-version-min=$IOS_MIN_VERSION" \
+        stage --stagedir="$out_dir/stage" \
+        --with-system --with-filesystem --with-program_options --with-date_time
+
+    popd >/dev/null
 }
 
-# Build i2pd static library
-build_i2pd() {
-    echo "Building i2pd static library for iOS..."
-    
-    cd "$BUILD_DIR/i2pd"
-    
-    # Create iOS makefile override
-    cat > Makefile.ios << 'EOF'
-CXX = xcrun --sdk iphoneos clang++
-CXXFLAGS = -std=c++17 -O2 -arch arm64 -mios-version-min=14.0 \
-           -DIOS -DMOBILE_BUILD \
-           -I$(OPENSSL_INC) -I$(BOOST_INC) \
-           -isysroot $(shell xcrun --sdk iphoneos --show-sdk-path)
-
-LDFLAGS = -arch arm64 \
-          -L$(OPENSSL_LIB) -L$(BOOST_LIB) \
-          -lssl -lcrypto \
-          -lboost_system -lboost_filesystem -lboost_program_options -lboost_date_time \
-          -framework Foundation -framework Security
-
-SOURCES = $(wildcard libi2pd/*.cpp) $(wildcard libi2pd_client/*.cpp)
-OBJECTS = $(SOURCES:.cpp=.o)
-
-libi2pd.a: $(OBJECTS)
-	$(AR) rcs $@ $^
-
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-clean:
-	rm -f $(OBJECTS) libi2pd.a
-EOF
-    
-    # Build
-    make -f Makefile.ios \
-        OPENSSL_INC="$BUILD_DIR/openssl-ios/include" \
-        OPENSSL_LIB="$BUILD_DIR/openssl-ios/lib" \
-        BOOST_INC="$BUILD_DIR/boost-ios/include" \
-        BOOST_LIB="$BUILD_DIR/boost-ios/lib" \
-        clean libi2pd.a
-    
-    echo "i2pd build complete"
+lipo_boost_libs() {
+    local libname
+    for libname in libboost_system libboost_filesystem libboost_program_options libboost_date_time; do
+        echo "Creating universal $libname.a"
+        lipo -create \
+            "$DEPS_DIR/boost-iphoneos/stage/lib/${libname}.a" \
+            "$DEPS_DIR/boost-iphonesimulator/stage/lib/${libname}.a" \
+            -output "$DEPS_DIR/boost-universal-${libname}.a"
+    done
 }
 
-# Copy output
-copy_output() {
-    echo "Copying output files..."
-    
-    # Copy libraries
-    cp "$BUILD_DIR/i2pd/libi2pd.a" "$OUTPUT_DIR/lib/"
-    cp "$BUILD_DIR/openssl-ios/lib/libssl.a" "$OUTPUT_DIR/lib/"
-    cp "$BUILD_DIR/openssl-ios/lib/libcrypto.a" "$OUTPUT_DIR/lib/"
-    cp "$BUILD_DIR/boost-ios/lib/"*.a "$OUTPUT_DIR/lib/"
-    
-    # Copy headers
-    cp -r "$BUILD_DIR/i2pd/libi2pd" "$OUTPUT_DIR/include/"
-    cp -r "$BUILD_DIR/i2pd/libi2pd_client" "$OUTPUT_DIR/include/"
-    cp -r "$BUILD_DIR/openssl-ios/include/openssl" "$OUTPUT_DIR/include/"
-    cp -r "$BUILD_DIR/boost-ios/include/boost" "$OUTPUT_DIR/include/"
-    
-    echo "Output copied to $OUTPUT_DIR"
+build_i2pd_platform() {
+    local platform_cmake="$1" # OS or SIMULATOR64
+    local platform_name="$2"  # iphoneos or iphonesimulator
+    local build_dir="$WORK_DIR/build-$platform_name"
+
+    echo "Configuring i2pd ($platform_name)..."
+    mkdir -p "$build_dir"
+    pushd "$build_dir" >/dev/null
+
+    cmake "$I2PD_SRC/build" \
+        -DIOS_PLATFORM="$platform_cmake" \
+        -DPATCH=/usr/bin/patch \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_TOOLCHAIN_FILE="$IOS_CMAKE_DIR/toolchain/iOS.cmake" \
+        -DWITH_STATIC=yes \
+        -DWITH_BINARY=no \
+        -DBoost_INCLUDE_DIR="$DEPS_DIR/boost_${BOOST_VERSION//./_}" \
+        -DBoost_LIBRARY_DIR="$DEPS_DIR/boost-$platform_name/stage/lib" \
+        -DOPENSSL_INCLUDE_DIR="$DEPS_DIR/openssl-$platform_name/include" \
+        -DOPENSSL_SSL_LIBRARY="$DEPS_DIR/openssl-$platform_name/lib/libssl.a" \
+        -DOPENSSL_CRYPTO_LIBRARY="$DEPS_DIR/openssl-$platform_name/lib/libcrypto.a"
+
+    # shellcheck disable=SC2046
+    make -j$(sysctl -n hw.ncpu) VERBOSE=1
+    popd >/dev/null
 }
 
-# Create xcframework (for easier Xcode integration)
-create_xcframework() {
-    echo "Creating xcframework..."
-    
-    # Create module map
-    mkdir -p "$OUTPUT_DIR/include/i2pd"
-    cat > "$OUTPUT_DIR/include/i2pd/module.modulemap" << 'EOF'
-module i2pd {
-    umbrella header "i2pd.h"
-    export *
-    link "i2pd"
-}
-EOF
-    
-    # Create umbrella header
-    cat > "$OUTPUT_DIR/include/i2pd/i2pd.h" << 'EOF'
-#ifndef I2PD_H
-#define I2PD_H
+combine_universal_libs() {
+    echo "Combining fat libraries..."
+    libtool -static -o "$OUTPUT_DIR/lib/libi2pdclient.a" "$WORK_DIR"/build-*/libi2pdclient.a
+    libtool -static -o "$OUTPUT_DIR/lib/libi2pd.a" "$WORK_DIR"/build-*/libi2pd.a
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// i2pd C API for FFI
-int i2pd_init(const char* config_path);
-int i2pd_start(void);
-int i2pd_stop(void);
-int i2pd_is_running(void);
-
-// Router info
-const char* i2pd_get_router_status(void);
-const char* i2pd_get_router_info(void);
-int i2pd_get_active_peers(void);
-int i2pd_get_known_peers(void);
-int i2pd_get_active_tunnels(void);
-
-// Bandwidth
-long i2pd_get_bandwidth_in(void);
-long i2pd_get_bandwidth_out(void);
-long i2pd_get_transit_bandwidth(void);
-
-// Tunnels
-int i2pd_start_http_proxy(int port);
-int i2pd_stop_http_proxy(void);
-int i2pd_start_socks_proxy(int port);
-int i2pd_stop_socks_proxy(void);
-
-// Logs
-const char* i2pd_get_logs(void);
-void i2pd_clear_logs(void);
-
-// Config
-int i2pd_set_config(const char* key, const char* value);
-const char* i2pd_get_config(const char* key);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif // I2PD_H
-EOF
-    
-    echo "Headers created"
-}
-
-# Main build process
-main() {
-    echo "Starting build process..."
-    
-    # Check for Xcode
-    if ! command -v xcrun &> /dev/null; then
-        echo "Error: Xcode command line tools not found"
-        exit 1
+    # Combine wrapper if built for both platforms
+    if [ -f "$WORK_DIR/wrapper-iphoneos/libi2pdwrapper.a" ] && [ -f "$WORK_DIR/wrapper-iphonesimulator/libi2pdwrapper.a" ]; then
+        lipo -create "$WORK_DIR/wrapper-iphoneos/libi2pdwrapper.a" "$WORK_DIR/wrapper-iphonesimulator/libi2pdwrapper.a" -output "$OUTPUT_DIR/lib/libi2pdwrapper.a"
     fi
-    
-    build_openssl
-    build_boost
-    build_i2pd
-    copy_output
-    create_xcframework
-    
+
+    # Dependencies (OpenSSL + Boost) into fat libs for convenience
+    lipo -create "$DEPS_DIR/openssl-iphoneos/lib/libssl.a" "$DEPS_DIR/openssl-iphonesimulator/lib/libssl.a" -output "$OUTPUT_DIR/lib/libssl.a"
+    lipo -create "$DEPS_DIR/openssl-iphoneos/lib/libcrypto.a" "$DEPS_DIR/openssl-iphonesimulator/lib/libcrypto.a" -output "$OUTPUT_DIR/lib/libcrypto.a"
+
+    local libname
+    for libname in libboost_system libboost_filesystem libboost_program_options libboost_date_time; do
+        lipo -create "$DEPS_DIR/boost-iphoneos/stage/lib/${libname}.a" "$DEPS_DIR/boost-iphonesimulator/stage/lib/${libname}.a" -output "$OUTPUT_DIR/lib/${libname}.a"
+    done
+}
+
+copy_headers() {
+    echo "Copying headers..."
+    mkdir -p "$OUTPUT_DIR/include/i2pd"
+    cp -R "$I2PD_SRC/libi2pd" "$OUTPUT_DIR/include/" 2>/dev/null || true
+    cp -R "$I2PD_SRC/libi2pd_client" "$OUTPUT_DIR/include/" 2>/dev/null || true
+        cp -R "$I2PD_SRC/libi2pd_wrapper" "$OUTPUT_DIR/include/" 2>/dev/null || true
+    cp -R "$DEPS_DIR/openssl-iphoneos/include/openssl" "$OUTPUT_DIR/include/" 2>/dev/null || true
+    cp -R "$BOOST_SRC/boost" "$OUTPUT_DIR/include/" 2>/dev/null || true
+}
+
+    build_wrapper_platform() {
+        local platform_name="$1"   # iphoneos or iphonesimulator
+        local build_dir="$WORK_DIR/wrapper-$platform_name"
+        local sdk_path
+        sdk_path=$(xcrun --sdk "$platform_name" --show-sdk-path)
+
+        echo "Building i2pd wrapper for $platform_name..."
+        mkdir -p "$build_dir"
+        pushd "$I2PD_SRC/libi2pd_wrapper" >/dev/null
+
+        local cxx
+        cxx=$(xcrun --sdk "$platform_name" --find clang++)
+        local cflags="-std=c++17 -fembed-bitcode -O2 -mios-version-min=$IOS_MIN_VERSION -isysroot $sdk_path"
+        local includes="-I$I2PD_SRC/libi2pd -I$I2PD_SRC/libi2pd_client -I$DEPS_DIR/openssl-$platform_name/include -I$BOOST_SRC"
+
+        rm -f "$build_dir"/*.o
+        for src in *.cpp; do
+            [ -f "$src" ] || continue
+            obj="$build_dir/${src%.cpp}.o"
+            echo "  compiling $src"
+            "$cxx" $cflags $includes -c "$src" -o "$obj"
+        done
+
+        libtool -static -o "$build_dir/libi2pdwrapper.a" "$build_dir"/*.o
+        popd >/dev/null
+    }
+
+main() {
+    require_macos_tools
+    fetch_sources
+
+    build_openssl_platform iphoneos "${DEVICE_ARCHS[@]}"
+    build_openssl_platform iphonesimulator "${SIM_ARCHS[@]}"
+
+    build_boost_platform iphoneos "${DEVICE_ARCHS[@]}"
+    build_boost_platform iphonesimulator "${SIM_ARCHS[@]}"
+
+    build_i2pd_platform SIMULATOR64 iphonesimulator
+    build_i2pd_platform OS iphoneos
+
+        build_wrapper_platform iphoneos
+        build_wrapper_platform iphonesimulator
+
+    combine_universal_libs
+    copy_headers
+
     echo "========================================"
-    echo "Build completed successfully!"
-    echo "Output directory: $OUTPUT_DIR"
+    echo "Build completed"
+    echo "Artifacts:"
+    ls -1 "$OUTPUT_DIR/lib"
+    echo "Headers:  $OUTPUT_DIR/include"
     echo "========================================"
-    
-    echo ""
-    echo "Libraries built:"
-    ls -la "$OUTPUT_DIR/lib/"
-    
-    echo ""
-    echo "Next steps:"
-    echo "1. Copy output/lib/*.a to your iOS project"
-    echo "2. Copy output/include/* to your project's headers"
-    echo "3. Link against the static libraries in Xcode"
+    echo "Next steps (per upstream docs):"
+    echo "  • Link libi2pd.a and libi2pdclient.a plus libssl/libcrypto and Boost libs in Xcode"
+    echo "  • Add $OUTPUT_DIR/include to Header Search Paths"
+    echo "  • Add libc++ and libz system libs"
 }
 
 main "$@"

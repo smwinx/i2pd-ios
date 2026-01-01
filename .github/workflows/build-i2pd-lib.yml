@@ -6,21 +6,86 @@ on:
     paths:
       - '.github/workflows/build-i2pd-lib.yml'
 
-# Build ACTUAL i2pd library using CMake + ios-cmake toolchain
-# Based on: https://github.com/vovasty/SwiftyI2P/blob/main/workspace/build-i2pd.sh
 env:
   OPENSSL_VERSION: '3.0.12'
   BOOST_VERSION: '1.84.0'
-  BOOST_VERSION_UNDERSCORE: '1_84_0'
-  I2PD_VERSION: '2.54.0'
-  IOS_MIN_VERSION: '11.0'
+  I2PD_VERSION: '2.58.0'
+  IOS_MIN_VERSION: '14.0'
 
 jobs:
   build-ios-libs:
     runs-on: macos-14
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.0'
+
+      - name: Install build deps (cmake, libtool)
+        run: |
+          brew install cmake libtool || true
+          cmake --version
+          libtool -V || true
+
+      - name: Run unified build script (device + simulator)
+        env:
+          I2PD_VERSION: ${{ env.I2PD_VERSION }}
+          OPENSSL_VERSION: ${{ env.OPENSSL_VERSION }}
+          BOOST_VERSION: ${{ env.BOOST_VERSION }}
+          IOS_MIN_VERSION: ${{ env.IOS_MIN_VERSION }}
+        run: |
+          cd scripts
+          chmod +x build_i2pd_ios.sh
+          ./build_i2pd_ios.sh
+
+      - name: Generate local podspec for i2pd
+        run: |
+          cd scripts/output
+          cat > i2pd.podspec <<'EOF'
+          Pod::Spec.new do |s|
+            s.name             = 'i2pd'
+            s.version          = '${{ env.I2PD_VERSION }}'
+            s.summary          = 'Prebuilt i2pd static libraries for iOS (device + simulator)'
+            s.description      = 'Prebuilt i2pd core and client libraries plus OpenSSL and Boost, built via ios-cmake.'
+            s.homepage         = 'https://i2pd.website/'
+            s.license          = { :type => 'BSD' }
+            s.author           = { 'PurpleI2P' => 'dev@i2pd.website' }
+            s.source           = { :path => '.' }
+            s.platform         = :ios, '${{ env.IOS_MIN_VERSION }}'
+            s.vendored_libraries = [
+              'lib/libi2pd.a',
+              'lib/libi2pdclient.a',
+              'lib/libi2pdwrapper.a',
+              'lib/libssl.a',
+              'lib/libcrypto.a',
+              'lib/libboost_system.a',
+              'lib/libboost_filesystem.a',
+              'lib/libboost_program_options.a',
+              'lib/libboost_date_time.a'
+            ]
+            s.public_header_files = 'include/**/*.{h,hpp}'
+            s.header_mappings_dir = 'include'
+            s.libraries = 'c++', 'z'
+            s.pod_target_xcconfig = {
+              'HEADER_SEARCH_PATHS' => '$(PODS_TARGET_SRCROOT)/include $(PODS_TARGET_SRCROOT)/include/libi2pd_wrapper',
+              'CLANG_CXX_LANGUAGE_STANDARD' => 'gnu++17',
+              'OTHER_LDFLAGS' => '-lc++ -lz'
+            }
+            s.user_target_xcconfig = {
+              'HEADER_SEARCH_PATHS' => '$(PODS_ROOT)/i2pd/include $(PODS_ROOT)/i2pd/include/libi2pd_wrapper'
+            }
+          end
+          EOF
+
+      - name: Upload libraries and headers
+        uses: actions/upload-artifact@v4
+        with:
+          name: i2pd-ios-universal
+          path: scripts/output
+          retention-days: 30
 
       - name: Setup Xcode 15
         uses: maxim-lobanov/setup-xcode@v1

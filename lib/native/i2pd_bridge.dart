@@ -127,6 +127,23 @@ class I2pdBridge {
     }
   }
   
+  /// Run a peer test to verify network connectivity
+  Future<bool> runPeerTest() async {
+    if (!_running) {
+      debugPrint('I2pdBridge: Cannot run peer test - daemon not running');
+      return false;
+    }
+    
+    try {
+      final result = await _channel.invokeMethod<bool>('runPeerTest') ?? false;
+      debugPrint('I2pdBridge: Peer test initiated: $result');
+      return result;
+    } catch (e) {
+      debugPrint('I2pdBridge: Run peer test error: $e');
+      return false;
+    }
+  }
+  
   void _startStatusPolling() {
     _statusTimer?.cancel();
     _statusTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
