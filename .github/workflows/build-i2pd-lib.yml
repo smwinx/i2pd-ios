@@ -6,15 +6,14 @@ on:
     paths:
       - '.github/workflows/build-i2pd-lib.yml'
 
-# Build ACTUAL i2pd library using CMake + ios-cmake toolchain (official method)
-# Based on: https://i2pd.readthedocs.io/en/latest/devs/building/ios/
-# And: https://github.com/vovasty/SwiftyI2P
+# Build ACTUAL i2pd library using CMake + ios-cmake toolchain
+# Based on: https://github.com/vovasty/SwiftyI2P/blob/main/workspace/build-i2pd.sh
 env:
   OPENSSL_VERSION: '3.0.12'
   BOOST_VERSION: '1.84.0'
   BOOST_VERSION_UNDERSCORE: '1_84_0'
   I2PD_VERSION: '2.54.0'
-  IOS_MIN_VERSION: '14.0'
+  IOS_MIN_VERSION: '11.0'
 
 jobs:
   build-ios-libs:
@@ -30,7 +29,7 @@ jobs:
 
       - name: Install build tools
         run: |
-          brew install cmake autoconf automake libtool || true
+          brew install cmake || true
           cmake --version
           xcodebuild -version
 
@@ -43,16 +42,19 @@ jobs:
       - name: Clone ios-cmake toolchain
         run: |
           cd ~
+          # Use leetal's ios-cmake which is well-maintained
           git clone --depth 1 https://github.com/leetal/ios-cmake.git
-          # The toolchain is at toolchain/ios.toolchain.cmake (like SwiftyI2P uses)
-          echo "IOS_TOOLCHAIN=$HOME/ios-cmake/ios.toolchain.cmake" >> $GITHUB_ENV
-          ls -la ~/ios-cmake/
-          ls -la ~/ios-cmake/*.cmake 2>/dev/null || true
-          # If toolchain folder exists, use that path
-          if [ -f "$HOME/ios-cmake/toolchain/ios.toolchain.cmake" ]; then
-            echo "Found toolchain at ios-cmake/toolchain/"
-            echo "IOS_TOOLCHAIN=$HOME/ios-cmake/toolchain/ios.toolchain.cmake" >> $GITHUB_ENV
+          
+          # Find the toolchain file
+          if [ -f "$HOME/ios-cmake/ios.toolchain.cmake" ]; then
+            echo "IOS_TOOLCHAIN=$HOME/ios-cmake/ios.toolchain.cmake" >> $GITHUB_ENV
+          else
+            echo "Looking for toolchain..."
+            find ~/ios-cmake -name "*.toolchain.cmake" -o -name "ios.cmake"
+            exit 1
           fi
+          
+          echo "=== Toolchain location ==="
           cat $GITHUB_ENV
 
       # ==============================================================
@@ -81,77 +83,29 @@ jobs:
           
           echo "=== Verifying OpenSSL ==="
           ls -la ~/deps/lib/libssl.a ~/deps/lib/libcrypto.a
-          file ~/deps/lib/libssl.a
           lipo -info ~/deps/lib/libssl.a
-          echo "OpenSSL built successfully"
+          echo "OpenSSL built successfully for iOS arm64"
 
       # ==============================================================
-      # BUILD BOOST FOR iOS arm64
+      # DOWNLOAD BOOST HEADERS (i2pd uses Boost mostly header-only)
       # ==============================================================
-      - name: Build Boost for iOS
+      - name: Download Boost headers
         run: |
           cd ~/build/boost
           
           echo "=== Downloading Boost ${BOOST_VERSION} ==="
           curl -LO https://boostorg.jfrog.io/artifactory/main/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.gz
           tar xzf boost_${BOOST_VERSION_UNDERSCORE}.tar.gz
-          cd boost_${BOOST_VERSION_UNDERSCORE}
           
-          IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          IOS_SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
-          XCODE_ROOT=$(xcode-select -p)
-          COMPILER="$XCODE_ROOT/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+          echo "=== Installing Boost headers ==="
+          cp -r boost_${BOOST_VERSION_UNDERSCORE}/boost ~/deps/include/
           
-          echo "=== iOS SDK: $IOS_SDK ==="
-          echo "=== SDK Version: $IOS_SDK_VERSION ==="
-          
-          echo "=== Bootstrapping Boost ==="
-          ./bootstrap.sh --with-libraries=system,filesystem,program_options,date_time
-          
-          echo "=== Creating iOS toolchain config ==="
-          cat > tools/build/src/user-config.jam << 'JAMEOF'
-          using darwin : iphoneos
-            : xcrun --sdk iphoneos clang++ -arch arm64 -std=c++17 -stdlib=libc++ -miphoneos-version-min=14.0 -fvisibility=hidden -fvisibility-inlines-hidden -DBOOST_AC_USE_PTHREADS -DBOOST_SP_USE_PTHREADS
-            : <striper> <root>/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer
-            : <architecture>arm <target-os>iphone
-            ;
-          JAMEOF
-          
-          echo "=== user-config.jam ==="
-          cat tools/build/src/user-config.jam
-          
-          echo "=== Building Boost static libraries ==="
-          ./b2 -j$(sysctl -n hw.ncpu) \
-            toolset=darwin-iphoneos \
-            target-os=iphone \
-            architecture=arm \
-            link=static \
-            variant=release \
-            threading=multi \
-            define=_LITTLE_ENDIAN \
-            --prefix=$HOME/deps \
-            --build-dir=$HOME/build/boost/build \
-            install 2>&1 || true
-          
-          echo "=== Copying Boost headers ==="
-          if [ ! -d ~/deps/include/boost ]; then
-            cp -r boost ~/deps/include/
-          fi
-          
-          echo "=== Looking for built Boost libs ==="
-          find ~/build/boost -name "libboost*.a" 2>/dev/null | head -20
-          find ~/deps -name "libboost*.a" 2>/dev/null | head -20
-          
-          # Copy any built libs to deps
-          find ~/build/boost -name "libboost*.a" -exec cp {} ~/deps/lib/ \; 2>/dev/null || true
-          
-          echo "=== Boost libraries ==="
-          ls -la ~/deps/lib/libboost*.a 2>/dev/null || echo "Boost libs may not have built - will use header-only"
-          
-          echo "Boost setup complete"
+          echo "=== Boost headers installed ==="
+          ls ~/deps/include/boost | head -10
+          echo "Total headers: $(ls ~/deps/include/boost | wc -l)"
 
       # ==============================================================
-      # BUILD i2pd USING CMAKE (Official method)
+      # CLONE i2pd SOURCE
       # ==============================================================
       - name: Clone i2pd source
         run: |
@@ -161,17 +115,24 @@ jobs:
             git clone --depth 1 https://github.com/PurpleI2P/i2pd.git i2pd-src
           
           cd i2pd-src
-          ls -la
-          echo "=== libi2pd sources ==="
-          ls libi2pd/*.cpp | wc -l
-          echo "=== libi2pd_client sources ==="
-          ls libi2pd_client/*.cpp | wc -l
-          
-      # Create custom TargetArch.cmake that supports arm64 (like SwiftyI2P does)
+          echo "=== Source files ==="
+          echo "libi2pd: $(ls libi2pd/*.cpp | wc -l) cpp files"
+          echo "libi2pd_client: $(ls libi2pd_client/*.cpp | wc -l) cpp files"
+          echo "i18n: $(ls i18n/*.cpp | wc -l) cpp files"
+
+      # ==============================================================
+      # CREATE CUSTOM TargetArch.cmake FOR iOS arm64
+      # ==============================================================
       - name: Create custom TargetArch.cmake for iOS
         run: |
-          cat > ~/TargetArch.cmake << 'TARGETARCH'
-          # Based on Qt 5 processor detection - handles arm64 for iOS cross-compile
+          # This is needed because i2pd's cmake uses TargetArch.cmake which doesn't
+          # properly detect arm64 when cross-compiling for iOS
+          # Based on SwiftyI2P's approach
+          
+          cat > ~/TargetArch.cmake << 'EOF'
+          # Custom TargetArch.cmake for iOS arm64 cross-compile
+          # Based on SwiftyI2P's fix for i2pd iOS builds
+          
           set(archdetect_c_code "
           #if defined(__arm__) || defined(__TARGET_ARCH_ARM)
               #if defined(__ARM_ARCH_7__) || defined(__ARM_ARCH_7A__) || defined(__ARM_ARCH_7R__) || defined(__ARM_ARCH_7M__) || (defined(__TARGET_ARCH_ARM) && __TARGET_ARCH_ARM-0 >= 7)
@@ -203,12 +164,12 @@ jobs:
 
           function(target_architecture output_var)
               if(APPLE AND CMAKE_OSX_ARCHITECTURES)
-                  foreach(osx_arch \${CMAKE_OSX_ARCHITECTURES})
-                      if("\${osx_arch}" STREQUAL "arm64")
+                  foreach(osx_arch ${CMAKE_OSX_ARCHITECTURES})
+                      if("${osx_arch}" STREQUAL "arm64")
                           set(osx_arch_arm64 TRUE)
-                      elseif("\${osx_arch}" STREQUAL "x86_64")
+                      elseif("${osx_arch}" STREQUAL "x86_64")
                           set(osx_arch_x86_64 TRUE)
-                      elseif("\${osx_arch}" STREQUAL "i386")
+                      elseif("${osx_arch}" STREQUAL "i386")
                           set(osx_arch_i386 TRUE)
                       endif()
                   endforeach()
@@ -223,72 +184,76 @@ jobs:
                       list(APPEND ARCH i386)
                   endif()
               else()
-                  file(WRITE "\${CMAKE_BINARY_DIR}/arch.c" "\${archdetect_c_code}")
+                  file(WRITE "${CMAKE_BINARY_DIR}/arch.c" "${archdetect_c_code}")
                   enable_language(C)
-                  try_run(run_result_unused compile_result_unused "\${CMAKE_BINARY_DIR}" "\${CMAKE_BINARY_DIR}/arch.c"
-                      COMPILE_OUTPUT_VARIABLE ARCH CMAKE_FLAGS CMAKE_OSX_ARCHITECTURES=\${CMAKE_OSX_ARCHITECTURES})
-                  string(REGEX MATCH "cmake_ARCH ([a-zA-Z0-9_]+)" ARCH "\${ARCH}")
-                  string(REPLACE "cmake_ARCH " "" ARCH "\${ARCH}")
+                  try_run(run_result_unused compile_result_unused "${CMAKE_BINARY_DIR}" "${CMAKE_BINARY_DIR}/arch.c"
+                      COMPILE_OUTPUT_VARIABLE ARCH CMAKE_FLAGS CMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES})
+                  string(REGEX MATCH "cmake_ARCH ([a-zA-Z0-9_]+)" ARCH "${ARCH}")
+                  string(REPLACE "cmake_ARCH " "" ARCH "${ARCH}")
                   if (NOT ARCH)
                       set(ARCH unknown)
                   endif()
               endif()
-              set(\${output_var} "\${ARCH}" PARENT_SCOPE)
+              set(${output_var} "${ARCH}" PARENT_SCOPE)
           endfunction()
-          TARGETARCH
+          EOF
           
           echo "=== Custom TargetArch.cmake created ==="
-          cat ~/TargetArch.cmake
 
+      # ==============================================================
+      # BUILD i2pd WITH CMAKE FOR iOS
+      # ==============================================================
       - name: Build i2pd with CMake for iOS
         run: |
           cd ~/i2pd-src
           
-          # Copy custom TargetArch.cmake to i2pd cmake_modules (like SwiftyI2P does)
-          echo "=== Copying custom TargetArch.cmake to cmake_modules ==="
+          # Copy custom TargetArch.cmake (like SwiftyI2P does)
+          echo "=== Installing custom TargetArch.cmake ==="
           cp -f ~/TargetArch.cmake build/cmake_modules/TargetArch.cmake
-          cat build/cmake_modules/TargetArch.cmake | head -20
           
-          # Create output directory
-          mkdir -p ~/output
+          # Create build directory and run cmake from there (like SwiftyI2P)
+          mkdir -p ~/i2pd-build
+          cd ~/i2pd-build
           
-          # SwiftyI2P runs cmake from INSIDE the i2pd build directory
-          cd build
-          echo "=== Working directory: $(pwd) ==="
+          echo "=== Running CMake for iOS arm64 ==="
+          echo "Toolchain: $IOS_TOOLCHAIN"
           
-          echo "=== Configuring i2pd with CMake for iOS arm64 ==="
-          # Use exact SwiftyI2P cmake flags
-          cmake -DPLATFORM=OS64 \
+          # CMake configuration - based on SwiftyI2P's buildIOS() function
+          cmake \
+            -DPLATFORM=OS64 \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE=$IOS_TOOLCHAIN \
-            -DWITH_STATIC=yes \
-            -DWITH_BINARY=no \
+            -DWITH_STATIC=ON \
+            -DWITH_BINARY=OFF \
             -DWITH_UPNP=OFF \
             -DDEPLOYMENT_TARGET=${IOS_MIN_VERSION} \
             -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY=$HOME/output \
+            -DOPENSSL_ROOT_DIR=$HOME/deps \
             -DOPENSSL_INCLUDE_DIR=$HOME/deps/include \
+            -DOPENSSL_SSL_LIBRARY=$HOME/deps/lib/libssl.a \
+            -DOPENSSL_CRYPTO_LIBRARY=$HOME/deps/lib/libcrypto.a \
             -DBoost_INCLUDE_DIR=$HOME/deps/include \
-            -DBoost_LIBRARY_DIR=$HOME/deps/lib \
-            -DOPENSSL_SSL_LIBRARY=libssl.a \
-            -DOPENSSL_CRYPTO_LIBRARY=libcrypto.a \
-            . 2>&1 | tee cmake_config.log
+            -DBoost_NO_SYSTEM_PATHS=ON \
+            ~/i2pd-src/build 2>&1 | tee cmake_output.log
           
-          echo "=== CMake configuration complete ==="
-          echo "=== Building with make (like SwiftyI2P) ==="
-          make -j$(sysctl -n hw.ncpu) VERBOSE=1 2>&1 | tee build.log || {
-            echo "=== Build failed, showing last 100 lines ==="
-            tail -100 build.log
+          echo "=== CMake completed, building... ==="
+          make -j$(sysctl -n hw.ncpu) VERBOSE=1 2>&1 | tee build_output.log || {
+            echo "=== Build failed! Last 100 lines: ==="
+            tail -100 build_output.log
             exit 1
           }
           
-          echo "=== i2pd build complete ==="
-          ls -la $HOME/output/ 2>/dev/null || ls -la
+          echo "=== Build complete ==="
+          find ~/output -name "*.a" -exec ls -la {} \;
           find . -name "*.a" -exec ls -la {} \;
-          find ~/output -name "*.a" -exec ls -la {} \; 2>/dev/null || true
 
+      # ==============================================================
+      # FALLBACK: MANUAL COMPILATION IF CMAKE FAILS
+      # ==============================================================
       - name: Manual i2pd compilation fallback
         if: failure()
         run: |
+          echo "=== CMAKE FAILED - Trying manual compilation ==="
           cd ~/i2pd-src
           
           IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -296,29 +261,61 @@ jobs:
           AR="$(xcrun -find ar)"
           RANLIB="$(xcrun -find ranlib)"
           
-          CXXFLAGS="-arch arm64 -isysroot $IOS_SDK -miphoneos-version-min=${IOS_MIN_VERSION} -std=c++17 -stdlib=libc++ -fPIC -O2 -DMAC_OSX -DOPENSSL_SUPPRESS_DEPRECATED"
+          CXXFLAGS="-arch arm64 -isysroot $IOS_SDK -miphoneos-version-min=${IOS_MIN_VERSION}"
+          CXXFLAGS="$CXXFLAGS -std=c++17 -stdlib=libc++ -fPIC -O2"
+          CXXFLAGS="$CXXFLAGS -DMAC_OSX -DIOS -D__APPLE__"
+          CXXFLAGS="$CXXFLAGS -DOPENSSL_SUPPRESS_DEPRECATED"
+          CXXFLAGS="$CXXFLAGS -fvisibility=hidden"
+          
           INCLUDES="-I$HOME/deps/include -Ilibi2pd -Ilibi2pd_client -Ii18n"
           
-          echo "=== Manual compilation of libi2pd ==="
+          echo "=== Compiling libi2pd ==="
           mkdir -p obj/libi2pd obj/libi2pd_client obj/i18n
+          
+          SUCCESS=0
+          FAILED=0
           
           for src in libi2pd/*.cpp; do
             name=$(basename "$src" .cpp)
-            echo "Compiling $src..."
-            $CXX $CXXFLAGS $INCLUDES -c "$src" -o "obj/libi2pd/$name.o" 2>&1 || echo "Warning: $src failed"
+            echo "  $name..."
+            if $CXX $CXXFLAGS $INCLUDES -c "$src" -o "obj/libi2pd/$name.o" 2>/dev/null; then
+              ((SUCCESS++))
+            else
+              echo "    FAILED: $src"
+              ((FAILED++))
+            fi
           done
+          echo "libi2pd: $SUCCESS success, $FAILED failed"
           
+          echo "=== Compiling libi2pd_client ==="
+          SUCCESS=0
+          FAILED=0
           for src in libi2pd_client/*.cpp; do
             name=$(basename "$src" .cpp)
-            echo "Compiling $src..."
-            $CXX $CXXFLAGS $INCLUDES -c "$src" -o "obj/libi2pd_client/$name.o" 2>&1 || echo "Warning: $src failed"
+            echo "  $name..."
+            if $CXX $CXXFLAGS $INCLUDES -c "$src" -o "obj/libi2pd_client/$name.o" 2>/dev/null; then
+              ((SUCCESS++))
+            else
+              echo "    FAILED: $src"
+              ((FAILED++))
+            fi
           done
+          echo "libi2pd_client: $SUCCESS success, $FAILED failed"
           
+          echo "=== Compiling i18n ==="
+          SUCCESS=0
+          FAILED=0
           for src in i18n/*.cpp; do
             name=$(basename "$src" .cpp)
-            echo "Compiling $src..."
-            $CXX $CXXFLAGS $INCLUDES -c "$src" -o "obj/i18n/$name.o" 2>&1 || echo "Warning: $src failed"
+            echo "  $name..."
+            if $CXX $CXXFLAGS $INCLUDES -c "$src" -o "obj/i18n/$name.o" 2>/dev/null; then
+              ((SUCCESS++))
+            else
+              echo "    FAILED: $src"
+              ((FAILED++))
+            fi
           done
+          echo "i18n: $SUCCESS success, $FAILED failed"
           
           echo "=== Creating static libraries ==="
           $AR rcs $HOME/output/libi2pd.a obj/libi2pd/*.o 2>/dev/null || true
@@ -326,95 +323,46 @@ jobs:
           $AR rcs $HOME/output/libi2pdlang.a obj/i18n/*.o 2>/dev/null || true
           
           echo "=== Libraries created ==="
-          ls -la $HOME/output/*.a 2>/dev/null || echo "No libraries created"
+          ls -la $HOME/output/*.a 2>/dev/null || echo "No libraries"
 
+      # ==============================================================
+      # COLLECT ARTIFACTS
+      # ==============================================================
       - name: Collect build artifacts
         if: always()
         run: |
-          mkdir -p $HOME/artifacts/{lib,include}
+          mkdir -p ~/artifacts/{lib,include}
           
           echo "=== Collecting libraries ==="
-          cp $HOME/deps/lib/libssl.a $HOME/artifacts/lib/ 2>/dev/null || true
-          cp $HOME/deps/lib/libcrypto.a $HOME/artifacts/lib/ 2>/dev/null || true
-          cp $HOME/deps/lib/libboost*.a $HOME/artifacts/lib/ 2>/dev/null || true
-          cp $HOME/output/*.a $HOME/artifacts/lib/ 2>/dev/null || true
-          find ~/i2pd-src -name "*.a" -exec cp {} $HOME/artifacts/lib/ \; 2>/dev/null || true
+          cp ~/deps/lib/libssl.a ~/artifacts/lib/ 2>/dev/null || true
+          cp ~/deps/lib/libcrypto.a ~/artifacts/lib/ 2>/dev/null || true
+          cp ~/output/*.a ~/artifacts/lib/ 2>/dev/null || true
+          find ~/i2pd-build -name "*.a" -exec cp {} ~/artifacts/lib/ \; 2>/dev/null || true
+          find ~/i2pd-src -name "*.a" -exec cp {} ~/artifacts/lib/ \; 2>/dev/null || true
           
           echo "=== Collecting headers ==="
-          cp -r $HOME/deps/include/openssl $HOME/artifacts/include/ 2>/dev/null || true
-          cp -r $HOME/deps/include/boost $HOME/artifacts/include/ 2>/dev/null || true
-          mkdir -p $HOME/artifacts/include/i2pd
-          cp ~/i2pd-src/libi2pd/*.h $HOME/artifacts/include/i2pd/ 2>/dev/null || true
-          cp ~/i2pd-src/libi2pd_client/*.h $HOME/artifacts/include/i2pd/ 2>/dev/null || true
+          cp -r ~/deps/include/openssl ~/artifacts/include/ 2>/dev/null || true
+          mkdir -p ~/artifacts/include/i2pd
+          cp ~/i2pd-src/libi2pd/*.h ~/artifacts/include/i2pd/ 2>/dev/null || true
+          cp ~/i2pd-src/libi2pd_client/*.h ~/artifacts/include/i2pd/ 2>/dev/null || true
           
-          echo "=== Artifacts collected ==="
-          find $HOME/artifacts -type f | head -50
-          
-          echo "=== Library details ==="
-          for lib in $HOME/artifacts/lib/*.a; do
+          echo "=== Final artifacts ==="
+          ls -la ~/artifacts/lib/
+          echo ""
+          echo "=== Library architectures ==="
+          for lib in ~/artifacts/lib/*.a; do
             if [ -f "$lib" ]; then
-              echo "--- $lib ---"
-              file "$lib"
-              lipo -info "$lib" 2>/dev/null || true
+              echo "$(basename $lib): $(lipo -info $lib 2>/dev/null | grep -o 'arm64\|x86_64\|armv7' || echo 'unknown')"
             fi
           done
-
-      - name: Create XCFramework
-        if: always()
-        run: |
-          cd $HOME/artifacts
-          
-          # Create combined library if we have multiple i2pd libs
-          if [ -f lib/libi2pd.a ] && [ -f lib/libi2pdclient.a ]; then
-            echo "=== Creating combined libi2pd_combined.a ==="
-            libtool -static -o lib/libi2pd_combined.a lib/libi2pd.a lib/libi2pdclient.a lib/libi2pdlang.a 2>/dev/null || true
-          fi
-          
-          # Create XCFramework structure
-          mkdir -p i2pd.xcframework/ios-arm64
-          cp lib/*.a i2pd.xcframework/ios-arm64/ 2>/dev/null || true
-          cp -r include i2pd.xcframework/ios-arm64/ 2>/dev/null || true
-          
-          # Create Info.plist
-          cat > i2pd.xcframework/Info.plist << 'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>AvailableLibraries</key>
-            <array>
-              <dict>
-                <key>LibraryIdentifier</key>
-                <string>ios-arm64</string>
-                <key>LibraryPath</key>
-                <string>libi2pd.a</string>
-                <key>SupportedArchitectures</key>
-                <array>
-                  <string>arm64</string>
-                </array>
-                <key>SupportedPlatform</key>
-                <string>ios</string>
-              </dict>
-            </array>
-            <key>CFBundlePackageType</key>
-            <string>XFWK</string>
-            <key>XCFrameworkFormatVersion</key>
-            <string>1.0</string>
-          </dict>
-          </plist>
-          PLIST
-          
-          echo "=== XCFramework structure ==="
-          find i2pd.xcframework -type f
 
       - name: Upload i2pd library artifacts
         uses: actions/upload-artifact@v4
         with:
           name: i2pd-ios-arm64-libs
           path: |
-            ~/artifacts/lib/*.a
+            ~/artifacts/lib/
             ~/artifacts/include/
-            ~/artifacts/i2pd.xcframework/
           retention-days: 30
           if-no-files-found: warn
 
@@ -425,14 +373,5 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Libraries Built:" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          ls -la $HOME/artifacts/lib/*.a 2>/dev/null || echo "No libraries found"
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Architecture Verification:" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          for lib in $HOME/artifacts/lib/*.a; do
-            if [ -f "$lib" ]; then
-              echo "$(basename $lib): $(lipo -info $lib 2>/dev/null || echo 'unknown')"
-            fi
-          done
+          ls -la ~/artifacts/lib/*.a 2>/dev/null || echo "No libraries found"
           echo '```' >> $GITHUB_STEP_SUMMARY
