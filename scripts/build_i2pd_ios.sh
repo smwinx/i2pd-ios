@@ -4,22 +4,34 @@
 
 set -euo pipefail
 
+# Debug: print script location
+echo "Script: $0"
+echo "PWD: $(pwd)"
+
 # Versions
-I2PD_VERSION="2.58.0"
-OPENSSL_VERSION="3.0.12"
-BOOST_VERSION="1.84.0"
+I2PD_VERSION="${I2PD_VERSION:-2.58.0}"
+OPENSSL_VERSION="${OPENSSL_VERSION:-3.0.12}"
+BOOST_VERSION="${BOOST_VERSION:-1.84.0}"
 IOS_CMAKE_COMMIT="master" # keep in sync with https://github.com/vovasty/ios-cmake
 
 # SDK / arch settings
-IOS_MIN_VERSION="14.0"
+IOS_MIN_VERSION="${IOS_MIN_VERSION:-14.0}"
 DEVICE_ARCHS=(arm64)
 SIM_ARCHS=(arm64 x86_64)
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Handle both sourced and executed script scenarios
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+fi
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORK_DIR="$SCRIPT_DIR/.build"
 DEPS_DIR="$WORK_DIR/deps"
 OUTPUT_DIR="$SCRIPT_DIR/output"
+
+echo "SCRIPT_DIR: $SCRIPT_DIR"
+echo "WORK_DIR: $WORK_DIR"
 
 IOS_CMAKE_DIR="$DEPS_DIR/ios-cmake"
 I2PD_SRC="$DEPS_DIR/i2pd"
