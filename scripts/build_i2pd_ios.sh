@@ -1,6 +1,7 @@
 #!/bin/bash
 # i2pd iOS Build Script (device + simulator) aligned with official docs:
 # https://docs.i2pd.website/en/latest/devs/building/ios/
+# Simplified: removed -u flag, use simple string variables
 
 set -eo pipefail
 
