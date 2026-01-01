@@ -2,29 +2,31 @@
 # i2pd iOS Build Script (device + simulator) aligned with official docs:
 # https://docs.i2pd.website/en/latest/devs/building/ios/
 
-set -euo pipefail
+set -eo pipefail
 
-# Debug: print script location
+# Debug: print all environment info upfront
+echo "=== DEBUG: Script Startup ==="
+echo "Bash version: $BASH_VERSION"
 echo "Script: $0"
 echo "PWD: $(pwd)"
+echo "Arguments: $*"
+echo "=== Environment Variables ==="
+env | grep -E "^(I2PD|OPENSSL|BOOST|IOS)" || echo "(none set)"
+echo "=== End Debug ==="
 
-# Versions
+# Versions (with defaults)
 I2PD_VERSION="${I2PD_VERSION:-2.58.0}"
 OPENSSL_VERSION="${OPENSSL_VERSION:-3.0.12}"
 BOOST_VERSION="${BOOST_VERSION:-1.84.0}"
-IOS_CMAKE_COMMIT="master" # keep in sync with https://github.com/vovasty/ios-cmake
+IOS_CMAKE_COMMIT="master"
 
-# SDK / arch settings
+# SDK / arch settings  
 IOS_MIN_VERSION="${IOS_MIN_VERSION:-14.0}"
-DEVICE_ARCHS=(arm64)
-SIM_ARCHS=(arm64 x86_64)
+DEVICE_ARCHS="arm64"
+SIM_ARCHS="arm64 x86_64"
 
-# Handle both sourced and executed script scenarios
-if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-else
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-fi
+# Directory setup
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORK_DIR="$SCRIPT_DIR/.build"
 DEPS_DIR="$WORK_DIR/deps"
@@ -261,11 +263,11 @@ main() {
     require_macos_tools
     fetch_sources
 
-    build_openssl_platform iphoneos "${DEVICE_ARCHS[@]}"
-    build_openssl_platform iphonesimulator "${SIM_ARCHS[@]}"
+    build_openssl_platform iphoneos $DEVICE_ARCHS
+    build_openssl_platform iphonesimulator $SIM_ARCHS
 
-    build_boost_platform iphoneos "${DEVICE_ARCHS[@]}"
-    build_boost_platform iphonesimulator "${SIM_ARCHS[@]}"
+    build_boost_platform iphoneos $DEVICE_ARCHS
+    build_boost_platform iphonesimulator $SIM_ARCHS
 
     build_i2pd_platform SIMULATOR64 iphonesimulator
     build_i2pd_platform OS iphoneos
@@ -283,9 +285,9 @@ main() {
     echo "Headers:  $OUTPUT_DIR/include"
     echo "========================================"
     echo "Next steps (per upstream docs):"
-    echo "  â€¢ Link libi2pd.a and libi2pdclient.a plus libssl/libcrypto and Boost libs in Xcode"
-    echo "  â€¢ Add $OUTPUT_DIR/include to Header Search Paths"
-    echo "  â€¢ Add libc++ and libz system libs"
+    echo "  - Link libi2pd.a and libi2pdclient.a plus libssl/libcrypto and Boost libs in Xcode"
+    echo "  - Add $OUTPUT_DIR/include to Header Search Paths"
+    echo "  - Add libc++ and libz system libs"
 }
 
 main "$@"
